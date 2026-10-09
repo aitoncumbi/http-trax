@@ -51,18 +51,31 @@ struct Session {
     runtime: BTreeMap<String, String>,
     env_delta: BTreeMap<String, Option<String>>,
     var_delta: BTreeMap<String, Option<String>>,
+    /// Shown in every run's console (e.g. a missing environment).
+    warning: Option<String>,
 }
 
 impl Session {
     fn load(ws: &Workspace, opts: &RunOptions) -> Result<Self> {
         let manifest = ws.manifest()?;
         let workspace_vars = enabled_vars(&manifest.variables);
+        let mut warning = None;
         let (env_id, env_name, env) = match &opts.environment {
-            Some(needle) if !needle.is_empty() => {
-                let view = ws.find_environment(needle)?;
-                let (name, vars) = ws.effective_environment(&view.environment.id)?;
-                (Some(view.environment.id), name, vars)
-            }
+            Some(needle) if !needle.is_empty() => match ws.find_environment(needle) {
+                Ok(view) => {
+                    let (name, vars) = ws.effective_environment(&view.environment.id)?;
+                    (Some(view.environment.id), name, vars)
+                }
+                // The selected environment may have been deleted (for
+                // example by a teammate's change that was just pulled).
+                Err(Error::NotFound(_)) => {
+                    warning = Some(format!(
+                        "environment {needle:?} no longer exists; running without an environment"
+                    ));
+                    (None, String::new(), BTreeMap::new())
+                }
+                Err(e) => return Err(e),
+            },
             _ => (None, String::new(), BTreeMap::new()),
         };
         let mut runtime = ws.local_state()?.runtime_variables;
@@ -75,6 +88,7 @@ impl Session {
             runtime,
             env_delta: BTreeMap::new(),
             var_delta: BTreeMap::new(),
+            warning,
         })
     }
 
@@ -356,6 +370,14 @@ async fn execute(
         script_errors: Vec::new(),
         skipped: false,
     };
+    if let Some(w) = &session.warning {
+        result.logs.push(LogEntry {
+            level: "warn".into(),
+            message: w.clone(),
+            phase: "prepare".into(),
+            source: "runner".into(),
+        });
+    }
     let collection_vars = {
         let mut v = BTreeMap::new();
         if let Some(c) = ancestors.first() {
@@ -912,6 +934,18 @@ mod tests {
             Some(201),
             "{result:#?}"
         );
+
+        // A stale environment selection degrades to "no environment".
+        let stale = RunOptions {
+            environment: Some("deleted-env".into()),
+            persist: false,
+            ..Default::default()
+        };
+        let result = run_draft(&ws, &draft, Some(&col.id), &stale).await.unwrap();
+        assert!(result
+            .logs
+            .iter()
+            .any(|l| l.message.contains("no longer exists")));
 
         let mut bad = Request::new("Down", "GET", "http://127.0.0.1:9/nothing");
         bad.settings.timeout_ms = Some(2000);

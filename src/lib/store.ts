@@ -356,7 +356,6 @@ export const useStore = create<Store>()((set, get) => {
           viewingSaved: null,
         };
         pushTab(tab);
-        set({ view: get().view === "git" ? "git" : get().view });
         void loadSaved(tab.id);
       } catch (e) {
         fail(e);
