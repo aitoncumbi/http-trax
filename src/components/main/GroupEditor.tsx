@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { tabDirty, useStore, type GroupTab } from "@/lib/store";
 import type { GroupMeta } from "@/lib/types";
+import { newRequest } from "@/lib/util";
 import { AuthEditor } from "../editors/AuthEditor";
 import { KeyValueEditor, makeKv, makeVar } from "../editors/KeyValueEditor";
 import { ScriptsEditor } from "../editors/ScriptsEditor";
@@ -67,7 +68,14 @@ export function GroupEditor({ tab }: { tab: GroupTab }) {
             <KeyValueEditor rows={g.headers ?? []} onChange={(headers) => set({ headers })} make={makeKv} keyPlaceholder="Header" describe />
           </div>
         )}
-        {section === "auth" && <AuthEditor auth={g.auth ?? { type: "inherit" }} onChange={(auth) => set({ auth })} allowInherit={!tab.isCollection} />}
+        {section === "auth" && (
+          <AuthEditor
+            auth={g.auth ?? { type: "inherit" }}
+            onChange={(auth) => set({ auth })}
+            allowInherit={!tab.isCollection}
+            oauthTarget={{ request: { ...newRequest(), id: "", auth: g.auth ?? { type: "inherit" } }, parentId: tab.groupId }}
+          />
+        )}
         {section === "scripts" && (
           <ScriptsEditor
             scripts={g.scripts ?? {}}

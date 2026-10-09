@@ -16,6 +16,7 @@ pub mod http;
 pub mod import;
 pub mod interpolate;
 pub mod model;
+pub mod oauth;
 pub mod registry;
 pub mod runner;
 pub mod workspace;

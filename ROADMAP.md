@@ -75,7 +75,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 
 ## Phase 1 — Daily-driver polish
 
-- [ ] Import: Insomnia, Bruno, OpenAPI 3.x, HAR (cURL and Postman are done); Postman example responses and OAuth 2.0 settings
+- [ ] Import: Insomnia, Bruno, OpenAPI 3.x, HAR (cURL, Postman and Postman's OAuth 2.0 settings are done); Postman example responses
 - [x] Export: copy as cURL and code snippets (cURL, fetch, axios, Python requests, Go, Rust), with or without variables filled in
 - [ ] Search history and "restore as request"
 - [x] Cookie jar per workspace (redirect-aware, kept in `.trax/cookies.json`), cookie manager, response Cookies tab, per-request opt-out, MCP `list_cookies` / `clear_cookies`
@@ -86,7 +86,8 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [ ] Configurable keyboard shortcuts
 - [ ] Finish the Courion rename: installers, binaries, MCP server name, and a `courion.*` alias for the script API
 - [ ] Proxy settings, custom CA certificates, client certificates (mTLS)
-- [ ] More auth: OAuth 2.0 (authorization code + PKCE, client credentials, device code) with token refresh, Digest, AWS SigV4, NTLM
+- [x] OAuth 2.0: authorization code with PKCE (loopback redirect), client credentials, device code and password grants; tokens cached locally, refreshed and fetched automatically when no sign-in is needed; works for agents through MCP
+- [ ] More auth: Digest, AWS SigV4, NTLM; OAuth 2.0 client assertions (private_key_jwt) and token introspection
 - [ ] Tighten the webview CSP
 - [ ] In-memory workspace index for very large workspaces
 

@@ -3,6 +3,7 @@
 mod agent_commands;
 mod commands;
 mod git_commands;
+mod oauth_commands;
 mod state;
 mod sync;
 mod watch;
@@ -39,6 +40,11 @@ pub fn run() {
             commands::save_cookie,
             commands::delete_cookie,
             commands::clear_cookies,
+            oauth_commands::oauth_token_status,
+            oauth_commands::oauth_get_token,
+            oauth_commands::oauth_cancel,
+            oauth_commands::oauth_refresh_token,
+            oauth_commands::oauth_clear_token,
             commands::app_info,
             commands::list_workspaces,
             commands::create_workspace,

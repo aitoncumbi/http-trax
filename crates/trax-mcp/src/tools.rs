@@ -130,7 +130,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "description": { "type": "string" },
                     "variables": { "type": "object", "description": "Collection variables, e.g. {\"apiVersion\": \"v1\"}." },
                     "headers": { "type": "object", "description": "Headers added to every request, e.g. {\"Accept\": \"application/json\"}." },
-                    "auth": { "type": "object", "description": "{\"type\": \"bearer\", \"token\": \"{{token}}\"} | {\"type\": \"basic\", \"username\", \"password\"} | {\"type\": \"api-key\", \"key\", \"value\", \"location\": \"header\"|\"query\"} | {\"type\": \"none\"}" },
+                    "auth": { "type": "object", "description": "{\"type\": \"bearer\", \"token\": \"{{token}}\"} | {\"type\": \"basic\", \"username\", \"password\"} | {\"type\": \"api-key\", \"key\", \"value\", \"location\": \"header\"|\"query\"} | {\"type\": \"oauth2\", \"grant\": \"client-credentials\"|\"password\"|\"authorization-code\"|\"device-code\", \"tokenUrl\", \"clientId\", \"clientSecret\": \"{{clientSecret}}\", \"scope\", \"authUrl\", \"deviceAuthUrl\", \"extraParams\": [{\"key\": \"audience\", \"value\": \"...\"}]} (tokens are fetched, cached and refreshed automatically; authorization-code and device-code need the user to sign in once in the app) | {\"type\": \"none\"}" },
                     "scripts": { "type": "object", "description": format!("{{\"preRequest\": \"...\", \"postResponse\": \"...\"}} run around every request. {SCRIPT_HELP}") }
                 },
                 "required": ["name"]
@@ -383,8 +383,8 @@ fn check_not_protected(server: &Server, args: &Value) -> Result<(), String> {
     }
 }
 
-/// Values of secret variables in any environment and of cookies in the jar
-/// (sessions are credentials too), longest first.
+/// Values of secret variables in any environment, of cookies in the jar and
+/// of cached OAuth 2.0 tokens (all credentials), longest first.
 fn secret_values(ws: &Workspace) -> Vec<String> {
     let mut out: Vec<String> = ws
         .environments()
@@ -394,6 +394,14 @@ fn secret_values(ws: &Workspace) -> Vec<String> {
         .filter(|v| v.secret)
         .map(|v| v.value)
         .chain(CookieJar::of(ws).list().into_iter().map(|c| c.value))
+        .chain(
+            ws.local_state()
+                .map(|s| s.oauth_tokens)
+                .unwrap_or_default()
+                .into_values()
+                .flat_map(|t| [Some(t.access_token), t.refresh_token, t.id_token])
+                .flatten(),
+        )
         .filter(|v| v.chars().count() >= 4)
         .collect();
     out.sort_by_key(|v| std::cmp::Reverse(v.len()));

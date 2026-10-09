@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::cookies::CookieJar;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::interpolate::{interpolate, unresolved};
 use crate::model::*;
+use crate::oauth;
 use crate::runner::{
-    append_query, default_content_type, effective_auth, enabled_vars, encode, has_header,
-    merged_headers, RunOptions, Session,
+    ancestors_for, append_query, default_content_type, effective_auth, encode, has_header,
+    merged_headers, static_scope,
 };
 use crate::workspace::Workspace;
 
@@ -65,28 +66,9 @@ pub fn prepare_export(
     environment: Option<&str>,
     resolve: bool,
 ) -> Result<ExportRequest> {
-    let ancestors = match ws.request_context(&request.id) {
-        Ok(ctx) => ctx.ancestors,
-        Err(Error::NotFound(_)) => match parent_id {
-            Some(pid) => ws.group_chain(pid)?,
-            None => Vec::new(),
-        },
-        Err(e) => return Err(e),
-    };
+    let ancestors = ancestors_for(ws, request, parent_id)?;
     let vars = if resolve {
-        let session = Session::load(
-            ws,
-            &RunOptions {
-                environment: environment.map(str::to_string),
-                persist: false,
-                ..RunOptions::default()
-            },
-        )?;
-        let collection_vars = ancestors
-            .first()
-            .map(|c| enabled_vars(&c.variables))
-            .unwrap_or_default();
-        Some(session.scope(&collection_vars))
+        Some(static_scope(ws, &ancestors, environment)?)
     } else {
         None
     };
@@ -168,6 +150,37 @@ pub fn prepare_export(
                 username: sub(&username),
                 password: sub(&password),
             });
+        }
+        Auth::OAuth2(cfg) if !has_header(&headers, "authorization") => {
+            let cached = vars.as_ref().and_then(|v| {
+                let r = oauth::Resolved::new(&cfg, v, &request.settings);
+                oauth::cached(ws, &r.key()).map(|t| (r.header_value(&t), oauth::is_fresh(&t)))
+            });
+            match cached {
+                Some((value, fresh)) => {
+                    headers.push(Header::new("Authorization", value));
+                    if !fresh {
+                        warnings.push("The OAuth 2.0 access token has expired.".into());
+                    }
+                }
+                None => {
+                    let prefix = match cfg.header_prefix.trim() {
+                        "" => "Bearer",
+                        p => p,
+                    };
+                    headers.push(Header::new(
+                        "Authorization",
+                        format!("{prefix} <access token>"),
+                    ));
+                    if resolve {
+                        warnings.push(
+                            "No OAuth 2.0 access token yet: send the request or get one in the \
+                             Authorization tab, then copy again."
+                                .into(),
+                        );
+                    }
+                }
+            }
         }
         Auth::ApiKey {
             key,

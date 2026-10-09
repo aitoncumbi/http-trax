@@ -470,6 +470,7 @@ fn auth_name(a: &Auth) -> String {
         Auth::Bearer { .. } => "bearer",
         Auth::Basic { .. } => "basic",
         Auth::ApiKey { .. } => "api-key",
+        Auth::OAuth2(_) => "oauth2",
     }
     .to_string()
 }
@@ -482,6 +483,20 @@ fn describe_auth(a: &Auth) -> String {
         Auth::Basic { username, .. } => format!("Basic {username}:••••"),
         Auth::ApiKey { key, location, .. } => {
             format!("API key {key} in {location:?}").to_lowercase()
+        }
+        Auth::OAuth2(o) => {
+            let grant = match o.grant {
+                OAuth2Grant::ClientCredentials => "client credentials",
+                OAuth2Grant::AuthorizationCode => "authorization code",
+                OAuth2Grant::DeviceCode => "device code",
+                OAuth2Grant::Password => "password",
+            };
+            let scope = if o.scope.is_empty() {
+                String::new()
+            } else {
+                format!(", scope {}", o.scope)
+            };
+            format!("OAuth 2.0 ({grant}) for {}{scope}", o.client_id)
         }
     }
 }

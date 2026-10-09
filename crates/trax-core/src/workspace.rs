@@ -53,6 +53,9 @@ pub struct LocalState {
     /// Values of variables marked `secret`, per environment id.
     #[serde(default)]
     pub secrets: BTreeMap<String, BTreeMap<String, String>>,
+    /// OAuth 2.0 access tokens, by `oauth::Resolved::key`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub oauth_tokens: BTreeMap<String, OAuthToken>,
 }
 
 /// A request plus everything inherited from its parents.

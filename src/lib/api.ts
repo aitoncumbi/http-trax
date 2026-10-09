@@ -23,6 +23,8 @@ import type {
   Identity,
   ImportSummary,
   LocalState,
+  OAuthToken,
+  OAuthTokenStatus,
   MergeOutcome,
   PullMode,
   Remote,
@@ -123,6 +125,17 @@ export const api = {
     call<ExportRequest>("export_request", { workspaceId, request, parentId, environmentId, resolve }),
   writeFile: (path: string, contents: { text?: string; base64?: string }) =>
     call<void>("write_file", { path, text: contents.text ?? null, base64: contents.base64 ?? null }),
+
+  // OAuth 2.0 tokens (settings from the request's auth or a parent's)
+  oauthTokenStatus: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
+    call<OAuthTokenStatus>("oauth_token_status", { workspaceId, request, parentId, environmentId }),
+  oauthGetToken: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
+    call<OAuthToken>("oauth_get_token", { workspaceId, request, parentId, environmentId }),
+  oauthCancel: () => call<void>("oauth_cancel"),
+  oauthRefreshToken: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
+    call<OAuthToken>("oauth_refresh_token", { workspaceId, request, parentId, environmentId }),
+  oauthClearToken: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
+    call<boolean>("oauth_clear_token", { workspaceId, request, parentId, environmentId }),
 
   // cookie jar
   listCookies: (workspaceId: string) => call<CookieInfo[]>("list_cookies", { workspaceId }),

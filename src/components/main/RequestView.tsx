@@ -261,7 +261,13 @@ export function RequestView({ tab }: { tab: RequestTab }) {
             )}
             {section === "body" && <BodyEditor body={r.body ?? { mode: "none" }} onChange={(body) => set({ body })} />}
             {section === "auth" && (
-              <AuthEditor auth={r.auth ?? { type: "inherit" }} onChange={(a) => set({ auth: a })} inherited={inheritedAuth(chain)} environment={envName} />
+              <AuthEditor
+                auth={r.auth ?? { type: "inherit" }}
+                onChange={(a) => set({ auth: a })}
+                inherited={inheritedAuth(chain)}
+                environment={envName}
+                oauthTarget={{ request: r, parentId: null }}
+              />
             )}
             {section === "scripts" && (
               <ScriptsEditor

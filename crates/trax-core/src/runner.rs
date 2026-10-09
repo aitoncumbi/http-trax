@@ -21,6 +21,7 @@ use crate::error::{Error, Result};
 use crate::http::{self, HttpRequest, PreparedBody, PreparedPart};
 use crate::interpolate::{interpolate, unresolved};
 use crate::model::*;
+use crate::oauth;
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
@@ -501,8 +502,13 @@ async fn execute(
         });
     }
 
-    // 4. Auth.
+    // 4. Auth. An OAuth 2.0 token is only fetched once the request is sure
+    // to be sent (below).
+    let mut oauth = None;
     match effective_auth(request, ancestors) {
+        Auth::OAuth2(cfg) if !has_header(&sent.headers, "authorization") => {
+            oauth = Some(oauth::Resolved::new(&cfg, &vars, &request.settings));
+        }
         Auth::Bearer { token } if !has_header(&sent.headers, "authorization") => {
             sent.headers.push(Header::new(
                 "Authorization",
@@ -570,6 +576,26 @@ async fn execute(
     }
     if result.skipped {
         return result;
+    }
+    if let Some(r) = &oauth {
+        match oauth::token_for_run(ws, r).await {
+            Ok(t) => {
+                if let Some(note) = t.note {
+                    result.logs.push(LogEntry {
+                        level: "info".into(),
+                        message: note,
+                        phase: "prepare".into(),
+                        source: "runner".into(),
+                    });
+                }
+                sent.headers.push(Header::new("Authorization", t.header));
+                result.request = sent.clone();
+            }
+            Err(e) => {
+                result.error = Some(e);
+                return result;
+            }
+        }
     }
 
     // 5. Send. An explicit Cookie header bypasses the jar.
@@ -696,20 +722,52 @@ fn record_history(ws: &Workspace, session: &Session, runs: &[&RunResult]) {
 /// Run a request that may have unsaved edits. Inheritance comes from the
 /// saved request's location, or from `parent_id` for a new request, or
 /// nothing for an ad-hoc request.
+/// Parents of `request`: from the workspace when it is saved, otherwise the
+/// chain above `parent_id` (an unsaved draft).
+pub(crate) fn ancestors_for(
+    ws: &Workspace,
+    request: &Request,
+    parent_id: Option<&str>,
+) -> Result<Vec<GroupMeta>> {
+    match ws.request_context(&request.id) {
+        Ok(ctx) => Ok(ctx.ancestors),
+        Err(Error::NotFound(_)) => match parent_id {
+            Some(pid) => ws.group_chain(pid),
+            None => Ok(Vec::new()),
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// Variables as a run would resolve them below `ancestors`, without running
+/// scripts.
+pub(crate) fn static_scope(
+    ws: &Workspace,
+    ancestors: &[GroupMeta],
+    environment: Option<&str>,
+) -> Result<BTreeMap<String, String>> {
+    let session = Session::load(
+        ws,
+        &RunOptions {
+            environment: environment.map(str::to_string),
+            persist: false,
+            ..RunOptions::default()
+        },
+    )?;
+    let collection_vars = ancestors
+        .first()
+        .map(|c| enabled_vars(&c.variables))
+        .unwrap_or_default();
+    Ok(session.scope(&collection_vars))
+}
+
 pub async fn run_draft(
     ws: &Workspace,
     request: &Request,
     parent_id: Option<&str>,
     opts: &RunOptions,
 ) -> Result<RunResult> {
-    let ancestors = match ws.request_context(&request.id) {
-        Ok(ctx) => ctx.ancestors,
-        Err(Error::NotFound(_)) => match parent_id {
-            Some(pid) => ws.group_chain(pid)?,
-            None => Vec::new(),
-        },
-        Err(e) => return Err(e),
-    };
+    let ancestors = ancestors_for(ws, request, parent_id)?;
     let mut session = Session::load(ws, opts)?;
     let result = execute(ws, &mut session, request, &ancestors).await;
     if opts.persist {
