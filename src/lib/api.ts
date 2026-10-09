@@ -13,6 +13,7 @@ import type {
   Commit,
   Environment,
   EnvironmentView,
+  ExportRequest,
   FileChanges,
   GroupMeta,
   HistoryEntry,
@@ -115,6 +116,12 @@ export const api = {
   deleteSavedResponse: (workspaceId: string, requestId: string, responseId: string) =>
     call<void>("delete_saved_response", { workspaceId, requestId, responseId }),
 
+  // export and files
+  exportRequest: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null, resolve: boolean) =>
+    call<ExportRequest>("export_request", { workspaceId, request, parentId, environmentId, resolve }),
+  writeFile: (path: string, contents: { text?: string; base64?: string }) =>
+    call<void>("write_file", { path, text: contents.text ?? null, base64: contents.base64 ?? null }),
+
   // environments: git and protection
   setEnvironmentShared: (workspaceId: string, id: string, shared: boolean) =>
     call<EnvironmentView>("set_environment_shared", { workspaceId, id, shared }),
@@ -194,6 +201,30 @@ export async function pickDirectory(title: string): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({ directory: true, multiple: false, title });
   return typeof picked === "string" ? picked : null;
+}
+
+/**
+ * Save text or binary content to a file the user picks. In the browser
+ * preview it downloads instead. Returns false when the user cancels.
+ */
+export async function saveToFile(name: string, contents: { text?: string; base64?: string }, mime = "application/octet-stream"): Promise<boolean> {
+  if (isTauri()) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({ defaultPath: name, title: "Save response body" });
+    if (!path) return false;
+    await api.writeFile(path, contents);
+    return true;
+  }
+  const blob = contents.base64
+    ? new Blob([Uint8Array.from(atob(contents.base64), (c) => c.charCodeAt(0))], { type: mime })
+    : new Blob([contents.text ?? ""], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
 }
 
 /** Window controls for the custom title bar (no-ops in the browser preview). */

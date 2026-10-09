@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod diff;
 pub mod error;
+pub mod export;
 pub mod fsutil;
 pub mod history;
 pub mod http;
@@ -21,6 +22,7 @@ pub mod workspace;
 pub use agents::{ActivityKind, AgentActivity, AgentPermissions, AgentSession};
 pub use diff::{semantic_diff, ChangeKind, SemanticChange};
 pub use error::{Error, Result};
+pub use export::{prepare_export, ExportRequest};
 pub use history::HistoryEntry;
 pub use import::ImportSummary;
 pub use model::*;

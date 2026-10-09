@@ -152,8 +152,9 @@ export function CommandPalette() {
           if (tab) void s.sendTab(tab.id);
         },
       },
+      { label: "Copy as cURL", run: () => void s.copyAsCurl({ requestId: r.id }) },
+      { label: "Code snippet…", run: () => void s.showCodeDialog({ requestId: r.id }) },
       { label: "Copy URL", run: () => void navigator.clipboard?.writeText(r.url) },
-      { label: "Copy name", run: () => void navigator.clipboard?.writeText(r.name) },
     ];
     const commands: Item[] = [
       { id: "new", label: "New request", icon: <Plus size={17} strokeWidth={1.5} />, shortcut: "Ctrl N", section: "Commands", run: () => void s.newRequestHere() },

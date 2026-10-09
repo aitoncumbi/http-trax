@@ -487,3 +487,27 @@ export interface ImportSummary {
   requests: number;
   warnings: string[];
 }
+
+// ------------------------------------------------------------- export
+
+export interface ExportPart {
+  name: string;
+  value: string;
+  isFile: boolean;
+}
+
+export type ExportBody =
+  | { kind: "none" }
+  | { kind: "text"; text: string }
+  | { kind: "form"; fields: [string, string][] }
+  | { kind: "multipart"; parts: ExportPart[] };
+
+/** A request as it would be sent (see `export_request`). */
+export interface ExportRequest {
+  method: string;
+  url: string;
+  headers: { key: string; value: string }[];
+  body: ExportBody;
+  basicAuth?: { username: string; password: string } | null;
+  warnings: string[];
+}

@@ -33,6 +33,8 @@ pub fn run() {
             agent_commands::workspace_summaries,
             commands::set_environment_shared,
             commands::import_json,
+            commands::export_request,
+            commands::write_file,
             commands::app_info,
             commands::list_workspaces,
             commands::create_workspace,

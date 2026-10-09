@@ -43,7 +43,7 @@ impl Default for RunOptions {
 }
 
 /// Variable state for one run (or one collection run).
-struct Session {
+pub(crate) struct Session {
     workspace_vars: BTreeMap<String, String>,
     env_id: Option<String>,
     env_name: String,
@@ -56,7 +56,7 @@ struct Session {
 }
 
 impl Session {
-    fn load(ws: &Workspace, opts: &RunOptions) -> Result<Self> {
+    pub(crate) fn load(ws: &Workspace, opts: &RunOptions) -> Result<Self> {
         let manifest = ws.manifest()?;
         let workspace_vars = enabled_vars(&manifest.variables);
         let mut warning = None;
@@ -92,7 +92,10 @@ impl Session {
         })
     }
 
-    fn scope(&self, collection_vars: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    pub(crate) fn scope(
+        &self,
+        collection_vars: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
         let mut all = self.workspace_vars.clone();
         all.extend(collection_vars.clone());
         all.extend(self.env.clone());
@@ -146,7 +149,7 @@ fn apply_delta(map: &mut BTreeMap<String, String>, delta: &BTreeMap<String, Opti
     }
 }
 
-fn enabled_vars(vars: &[Variable]) -> BTreeMap<String, String> {
+pub(crate) fn enabled_vars(vars: &[Variable]) -> BTreeMap<String, String> {
     vars.iter()
         .filter(|v| v.enabled && !v.key.is_empty())
         .map(|v| (v.key.clone(), v.value.clone()))
@@ -168,19 +171,19 @@ fn to_script_headers(headers: &[Header]) -> Vec<trax_script::Header> {
         .collect()
 }
 
-fn set_header(headers: &mut Vec<Header>, key: &str, value: String) {
+pub(crate) fn set_header(headers: &mut Vec<Header>, key: &str, value: String) {
     match headers.iter_mut().find(|h| h.key.eq_ignore_ascii_case(key)) {
         Some(h) => h.value = value,
         None => headers.push(Header::new(key, value)),
     }
 }
 
-fn has_header(headers: &[Header], key: &str) -> bool {
+pub(crate) fn has_header(headers: &[Header], key: &str) -> bool {
     headers.iter().any(|h| h.key.eq_ignore_ascii_case(key))
 }
 
 /// Headers from collection → folders → request; later levels override.
-fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
+pub(crate) fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
     let mut out = Vec::new();
     let levels = ancestors
         .iter()
@@ -197,7 +200,7 @@ fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
     out
 }
 
-fn effective_auth(request: &Request, ancestors: &[GroupMeta]) -> Auth {
+pub(crate) fn effective_auth(request: &Request, ancestors: &[GroupMeta]) -> Auth {
     if !request.auth.is_inherit() {
         return request.auth.clone();
     }
@@ -218,7 +221,7 @@ fn initial_body(body: &Body) -> Option<String> {
     }
 }
 
-fn default_content_type(body: &Body) -> Option<&str> {
+pub(crate) fn default_content_type(body: &Body) -> Option<&str> {
     match body {
         Body::Json { .. } | Body::Graphql { .. } => Some("application/json"),
         Body::Xml { .. } => Some("application/xml"),
@@ -228,7 +231,7 @@ fn default_content_type(body: &Body) -> Option<&str> {
     }
 }
 
-fn append_query(url: &mut String, pairs: &[(String, String)]) {
+pub(crate) fn append_query(url: &mut String, pairs: &[(String, String)]) {
     if pairs.is_empty() {
         return;
     }
@@ -257,7 +260,7 @@ fn append_query(url: &mut String, pairs: &[(String, String)]) {
     *url = format!("{base}{sep}{query}{fragment}");
 }
 
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 

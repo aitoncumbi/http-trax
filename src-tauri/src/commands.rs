@@ -410,6 +410,45 @@ pub async fn set_environment_shared(
         .str_err()
 }
 
+/// A request as it would be sent, for "copy as cURL" and code snippets.
+#[tauri::command]
+pub async fn export_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    request: Request,
+    parent_id: Option<String>,
+    environment_id: Option<String>,
+    resolve: bool,
+) -> CmdResult<ExportRequest> {
+    let ws = state.workspace(&workspace_id)?;
+    prepare_export(
+        &ws,
+        &request,
+        parent_id.as_deref(),
+        environment_id.as_deref(),
+        resolve,
+    )
+    .str_err()
+}
+
+/// Write a response body (text, or base64 for binary) to a path the user picked.
+#[tauri::command]
+pub async fn write_file(
+    path: String,
+    text: Option<String>,
+    base64: Option<String>,
+) -> CmdResult<()> {
+    use base64::Engine as _;
+    let bytes = match (text, base64) {
+        (Some(t), _) => t.into_bytes(),
+        (None, Some(b)) => base64::engine::general_purpose::STANDARD
+            .decode(b)
+            .str_err()?,
+        (None, None) => Vec::new(),
+    };
+    tokio::fs::write(&path, bytes).await.str_err()
+}
+
 /// Import a Postman collection or environment export.
 #[tauri::command]
 pub async fn import_json(

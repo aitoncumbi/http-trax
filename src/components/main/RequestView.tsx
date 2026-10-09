@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Save, Send } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Code2, Copy, Loader2, Save, Send } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { tabDirty, useStore, type PaneLayout, type RequestTab } from "@/lib/store";
@@ -12,6 +12,7 @@ import { BodyEditor } from "../editors/BodyEditor";
 import { KeyValueEditor, makeKv } from "../editors/KeyValueEditor";
 import { ScriptsEditor } from "../editors/ScriptsEditor";
 import { VarInput } from "../editors/VarInput";
+import { useScopeFor, VarScopeContext } from "../editors/VarScope";
 import { Switch } from "../ui/Controls";
 import { MenuButton } from "../ui/Menu";
 import { TabStrip } from "../ui/Segmented";
@@ -106,6 +107,7 @@ export function RequestView({ tab }: { tab: RequestTab }) {
   const r = tab.draft;
   const dirty = tabDirty(tab);
   const chain = useMemo(() => findChain(tree?.collections ?? [], tab.requestId) ?? [], [tree, tab.requestId]);
+  const scope = useScopeFor(chain[0]?.meta);
 
   const set = (patch: Partial<Request>) => updateTab<RequestTab>(tab.id, (t) => ({ ...t, draft: { ...t.draft, ...patch } }));
 
@@ -127,6 +129,7 @@ export function RequestView({ tab }: { tab: RequestTab }) {
   const side = layout === "side";
 
   return (
+    <VarScopeContext.Provider value={scope}>
     <div className="flex min-h-0 flex-1 flex-col">
       {tab.diskVersion && (
         <div className="flex items-center gap-3 border-b border-warn/25 bg-warn/10 px-4 py-2 text-[13px] text-warn">
@@ -204,6 +207,17 @@ export function RequestView({ tab }: { tab: RequestTab }) {
           <Save size={15} strokeWidth={1.4} />
           Save
         </button>
+        <MenuButton
+          title="Code and more"
+          minWidth={200}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border-strong text-text-2 hover:bg-hover"
+          items={[
+            { label: "Code snippet…", icon: <Code2 size={14} />, onSelect: () => void useStore.getState().showCodeDialog({ tabId: tab.id }) },
+            { label: "Copy as cURL", icon: <Copy size={14} />, onSelect: () => void useStore.getState().copyAsCurl({ tabId: tab.id }) },
+          ]}
+        >
+          <Code2 size={15} strokeWidth={1.5} />
+        </MenuButton>
       </div>
 
       {/* panes */}
@@ -324,5 +338,6 @@ export function RequestView({ tab }: { tab: RequestTab }) {
         </section>
       </div>
     </div>
+    </VarScopeContext.Provider>
   );
 }

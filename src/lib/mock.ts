@@ -9,6 +9,7 @@ import type {
   Commit,
   Environment,
   EnvironmentView,
+  ExportRequest,
   GroupMeta,
   FileChanges,
   GroupNode,
@@ -642,6 +643,43 @@ const handlers: Record<string, (a: Args) => unknown> = {
     return structuredClone(env);
   },
   import_json: (a) => importPostman(ws(a.workspaceId), s(a, "json")),
+  export_request: (a): ExportRequest => {
+    const w = ws(a.workspaceId);
+    const request = a.request as Request;
+    const chain = findRequest(w, request.id)?.chain ?? [];
+    const env = w.environments.find((e) => e.id === a.environmentId);
+    const vars: Record<string, string> = {};
+    chain[0]?.meta.variables?.forEach((v) => (vars[v.key] = v.value));
+    env?.variables.forEach((v) => v.enabled && (vars[v.key] = v.value));
+    Object.assign(vars, env?.overrides ?? {}, w.runtime);
+    const sub = (t: string) => (a.resolve ? t.replace(/\{\{\s*([^{}\s]+)\s*\}\}/g, (m, k: string) => vars[k] ?? m) : t);
+    let url = request.url;
+    const params = (request.params ?? []).filter((p) => p.enabled && p.key);
+    if (params.length) url += (url.includes("?") ? "&" : "?") + params.map((p) => `${p.key}=${p.value}`).join("&");
+    const headers = [...chain.flatMap((g) => g.meta.headers ?? []), ...(request.headers ?? [])]
+      .filter((h) => h.enabled && h.key)
+      .map((h) => ({ key: h.key, value: sub(h.value) }));
+    const b = request.body ?? { mode: "none" };
+    if ((b.mode === "json" || b.mode === "graphql") && !headers.some((h) => h.key.toLowerCase() === "content-type")) headers.push({ key: "Content-Type", value: "application/json" });
+    if (b.mode === "form-urlencoded") headers.push({ key: "Content-Type", value: "application/x-www-form-urlencoded" });
+    const auth = request.auth?.type === "inherit" || !request.auth ? [...chain].reverse().map((g) => g.meta.auth).find((x) => x && x.type !== "inherit") : request.auth;
+    let basicAuth = null;
+    if (auth?.type === "bearer") headers.push({ key: "Authorization", value: `Bearer ${sub(auth.token)}` });
+    if (auth?.type === "basic") basicAuth = { username: sub(auth.username), password: sub(auth.password) };
+    if (auth?.type === "api-key" && auth.location === "header") headers.push({ key: auth.key, value: sub(auth.value) });
+    const body: ExportRequest["body"] =
+      b.mode === "json" || b.mode === "text" || b.mode === "xml"
+        ? { kind: "text", text: sub(b.text) }
+        : b.mode === "form-urlencoded"
+          ? { kind: "form", fields: b.fields.filter((f) => f.enabled).map((f) => [f.key, sub(f.value)] as [string, string]) }
+          : b.mode === "multipart"
+            ? { kind: "multipart", parts: b.fields.filter((f) => f.enabled).map((f) => ({ name: f.key, value: sub(f.value), isFile: !!f.isFile })) }
+            : b.mode === "graphql"
+              ? { kind: "text", text: JSON.stringify({ query: b.query, variables: b.variables ? safeJson(b.variables) : null }) }
+              : { kind: "none" };
+    const warnings = request.scripts?.preRequest?.trim() ? ["Pre-request scripts don't run for exports, so anything they set is missing."] : [];
+    return { method: request.method.toUpperCase(), url: sub(url), headers, body, basicAuth, warnings };
+  },
   agent_overview: (a) => {
     const now = Date.now();
     const session = (pid: number, client: string, clientId: string, ago: number) => ({

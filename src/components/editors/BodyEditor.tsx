@@ -8,6 +8,7 @@ import { prettyJson } from "@/lib/util";
 import { Radio } from "../ui/Controls";
 import { CodeEditor } from "./CodeEditor";
 import { KeyValueEditor, makeKv } from "./KeyValueEditor";
+import { useVarScope } from "./VarScope";
 
 const MODES: { id: BodyMode; label: string }[] = [
   { id: "none", label: "None" },
@@ -52,6 +53,7 @@ function switchMode(body: Body, mode: BodyMode): Body {
 }
 
 export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => void }) {
+  const variables = useVarScope();
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border-soft px-4">
@@ -91,6 +93,7 @@ export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body)
           <CodeEditor
             value={body.text}
             language={body.mode === "json" ? "json" : body.mode === "xml" ? "xml" : "text"}
+            variables={variables}
             onChange={(text) => onChange({ ...body, text })}
             placeholder={body.mode === "json" ? '{\n  "name": "{{userName}}"\n}' : ""}
           />
@@ -114,11 +117,11 @@ export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body)
           <div className="grid h-full min-h-0 grid-cols-[2fr_1fr]">
             <div className="min-h-0 border-r border-border">
               <div className="eyebrow px-4 pt-3">Query</div>
-              <CodeEditor value={body.query} onChange={(query) => onChange({ ...body, query })} placeholder="query { users { id name } }" />
+              <CodeEditor value={body.query} variables={variables} onChange={(query) => onChange({ ...body, query })} placeholder="query { users { id name } }" />
             </div>
             <div className="min-h-0">
               <div className="eyebrow px-4 pt-3">Variables (JSON)</div>
-              <CodeEditor value={body.variables} language="json" onChange={(variables) => onChange({ ...body, variables })} placeholder='{ "id": "{{userId}}" }' />
+              <CodeEditor value={body.variables} language="json" variables={variables} onChange={(v) => onChange({ ...body, variables: v })} placeholder='{ "id": "{{userId}}" }' />
             </div>
           </div>
         )}

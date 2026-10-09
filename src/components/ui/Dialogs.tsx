@@ -1,15 +1,18 @@
 "use client";
 
-import { FolderOpen, GitBranch, Plus, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, FolderOpen, GitBranch, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api, errorMessage, isTauri, pickDirectory } from "@/lib/api";
+import { generate, SNIPPET_LANGS, type SnippetLang } from "@/lib/codegen";
 import { parseCurl } from "@/lib/curl";
 import { useStore } from "@/lib/store";
-import type { GroupNode, TreeItem } from "@/lib/types";
+import type { ExportRequest, GroupNode, Request, TreeItem } from "@/lib/types";
 import { cx, findChain } from "@/lib/util";
 
+import { CodeEditor } from "../editors/CodeEditor";
 import { MethodPill } from "./Brand";
+import { Switch } from "./Controls";
 
 export function Modal({
   title,
@@ -488,6 +491,102 @@ function CurlImport({ close }: { close: () => void }) {
   );
 }
 
+const LANG_KEY = "http-trax.snippet-lang";
+
+function CodeDialog({ request, parentId }: { request: Request; parentId: string | null }) {
+  const close = useStore((s) => s.closeDialog);
+  const workspaceId = useStore((s) => s.activeWorkspaceId);
+  const envId = useStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.prefs.activeEnvironment ?? null);
+  const [lang, setLang] = useState<SnippetLang>(() => {
+    try {
+      const saved = localStorage.getItem(LANG_KEY) as SnippetLang | null;
+      return saved && SNIPPET_LANGS.some((l) => l.id === saved) ? saved : "curl";
+    } catch {
+      return "curl";
+    }
+  });
+  const [resolve, setResolve] = useState(true);
+  const [exported, setExported] = useState<{ key: string; value: ExportRequest } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const key = `${resolve}`;
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    api
+      .exportRequest(workspaceId, request, parentId, envId, resolve)
+      .then((value) => !cancelled && setExported({ key: `${resolve}`, value }))
+      .catch((e) => !cancelled && setError(errorMessage(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, request, parentId, envId, resolve]);
+
+  const current = exported?.key === key ? exported.value : null;
+  const code = current ? generate(lang, current) : "";
+  const editor = SNIPPET_LANGS.find((l) => l.id === lang)?.editor ?? "text";
+  const pick = (id: SnippetLang) => {
+    setLang(id);
+    try {
+      localStorage.setItem(LANG_KEY, id);
+    } catch {
+      // storage unavailable
+    }
+  };
+
+  return (
+    <Modal title={`Code for ${request.name || "request"}`} onClose={close} width={760}>
+      <div className="flex items-center justify-between gap-3 px-5 pt-4">
+        <div role="group" aria-label="Language" className="segmented">
+          {SNIPPET_LANGS.map((l) => (
+            <button key={l.id} type="button" aria-pressed={lang === l.id} onClick={() => pick(l.id)}>
+              {l.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 text-[13px] text-muted">
+          Fill in variables
+          <Switch checked={resolve} onChange={setResolve} label="Fill in variables" />
+        </label>
+      </div>
+      <div className="px-5 pt-3 pb-5">
+        <div className="relative h-[340px] overflow-hidden rounded-[10px] border border-border-mid bg-sunken">
+          {error ? (
+            <p className="p-4 text-[13px] text-danger">{error}</p>
+          ) : (
+            <CodeEditor value={code} language={editor} readOnly lineNumbers={false} />
+          )}
+          <button
+            type="button"
+            className="btn absolute top-2 right-2 h-7 bg-elev px-2.5"
+            disabled={!code}
+            onClick={async () => {
+              await navigator.clipboard?.writeText(code);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }}
+          >
+            {copied ? <Check size={13} /> : <Copy size={13} strokeWidth={1.5} />}
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        {current?.warnings.map((w) => (
+          <p key={w} className="mt-2 flex items-start gap-2 text-[12.5px] text-warn">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            {w}
+          </p>
+        ))}
+        <p className="mt-2 text-[12.5px] text-faint">
+          {resolve
+            ? "Values come from the active environment, secrets included. Share with care."
+            : "Variables stay as {{placeholders}}."}
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
   if (!dialog) return null;
@@ -500,5 +599,7 @@ export function Dialogs() {
       return <WorkspaceDialog mode={dialog.mode} />;
     case "import":
       return <ImportDialog initialTab={dialog.tab} />;
+    case "code":
+      return <CodeDialog request={dialog.request} parentId={dialog.parentId} />;
   }
 }
