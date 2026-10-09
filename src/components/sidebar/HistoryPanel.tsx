@@ -25,7 +25,7 @@ export function HistoryPanel() {
   const workspaceId = useStore((s) => s.activeWorkspaceId);
   const epoch = useStore((s) => s.historyEpoch);
   const exists = useStore((s) => s.tree);
-  const { openRequest, setView, confirm } = useStore.getState();
+  const { openRequest, confirm } = useStore.getState();
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [reload, setReload] = useState(0);
 
@@ -63,7 +63,7 @@ export function HistoryPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between pt-[18px] pr-3.5 pb-2 pl-[18px]">
+      <div className="flex shrink-0 items-center justify-between pt-3.5 pr-1 pb-2 pl-2.5">
         <h2 className="text-[15px] font-semibold">History</h2>
         <div className="flex">
           <button type="button" className="icon-btn" aria-label="Refresh history" title="Refresh" onClick={() => setReload((n) => n + 1)}>
@@ -88,14 +88,14 @@ export function HistoryPanel() {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {entries && entries.length === 0 && (
-          <p className="px-[18px] py-2 text-[13px] leading-[19px] text-faint">
+          <p className="px-2.5 py-2 text-[13px] leading-[19px] text-faint">
             Requests you send, and requests AI agents run through MCP, show up here. History stays on this machine.
           </p>
         )}
         {groups.map((g) => (
           <div key={g.label}>
-            <div className="eyebrow px-[18px] pt-2.5 pb-1.5">{g.label}</div>
-            <div className="flex flex-col gap-0.5 px-2.5 pb-2">
+            <div className="px-2.5 pt-2.5 pb-1.5 text-[12px] font-semibold tracking-[0.06em] text-faint uppercase">{g.label}</div>
+            <div className="flex flex-col gap-0.5 pb-2">
               {g.items.map((e) => {
                 const openable = !!e.requestId && known.has(e.requestId);
                 const time = new Date(e.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -105,9 +105,7 @@ export function HistoryPanel() {
                     type="button"
                     disabled={!openable}
                     onClick={() => {
-                      if (!e.requestId) return;
-                      setView("collections");
-                      void openRequest(e.requestId);
+                      if (e.requestId) void openRequest(e.requestId);
                     }}
                     title={`${e.method} ${e.url}\n${time}${e.environment ? ` · ${e.environment}` : ""}${e.error ? `\n${e.error}` : ""}`}
                     className={cx(

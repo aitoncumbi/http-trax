@@ -1,20 +1,20 @@
 "use client";
 
 import { AlertTriangle, ChevronDown, GitBranch, Loader2, Undo2 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { api, errorMessage, openExternal } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import type { Branch, Commit, FileChanges, FileStatus, MergeOutcome, PullMode, RepoStatus, SemanticChange } from "@/lib/types";
+import type { Commit, FileChanges, FileStatus, MergeOutcome, PullMode, RepoStatus, SemanticChange } from "@/lib/types";
 import { cx, timeAgo } from "@/lib/util";
 
 import { Checkbox } from "../ui/Controls";
 import { MenuButton, useContextMenu } from "../ui/Menu";
 import { Pills } from "../ui/Segmented";
+import { SidebarSection } from "../sidebar/Sidebar";
 import { BranchPopover } from "./BranchPopover";
+import { effectiveSelection, lists, useGit } from "./gitStore";
 import { RawDiff } from "./RawDiff";
-
-type Selection = { kind: "file"; path: string; staged: boolean } | { kind: "commit"; hash: string };
 
 function describe(outcome: MergeOutcome): string {
   switch (outcome.kind) {
@@ -131,87 +131,195 @@ const icons = {
   ),
 };
 
-/** Full-width source control: changes and commit, what changed, history. */
-export function GitView() {
+/** Loads repository state for the active workspace while Source control is open. */
+function useGitLoader(workspaceId: string | null) {
+  const gitEpoch = useStore((s) => s.gitEpoch);
+  const reloadKey = useGit((s) => s.reloadKey);
+  useEffect(() => {
+    if (workspaceId) void useGit.getState().load(workspaceId);
+  }, [workspaceId, gitEpoch, reloadKey]);
+}
+
+async function discard(paths: string[], label: string) {
+  const ok = await useStore.getState().confirm({
+    title: paths.length === 1 ? "Discard changes?" : `Discard ${paths.length} changes?`,
+    message: `${label}\n\nThis can't be undone.`,
+    confirm: "Discard",
+    danger: true,
+  });
+  if (ok) void useGit.getState().run("discard", (w) => api.gitDiscard(w, paths));
+}
+
+/** Sidebar half of Source control: changed files with stage checkboxes, and the commit box. */
+export function GitChanges() {
+  const status = useGit((s) => s.status);
+  const log = useGit((s) => s.log);
+  const busy = useGit((s) => s.busy);
+  const selected = useGit((s) => s.selected);
+  const message = useGit((s) => s.message);
+  const { run, setSelected, setMessage, refresh } = useGit.getState();
+  const { conflicted, staged, changes } = lists(status);
+  const selection = effectiveSelection(selected, status, log);
+
+  if (!status?.isRepo) {
+    return (
+      <SidebarSection title="Changes" />
+    );
+  }
+  const current = status.branch ?? "HEAD";
+
+  const commit = async (opts: { stageAll?: boolean; amend?: boolean; thenPush?: boolean }) => {
+    const msg = message.trim();
+    if (!msg && !opts.amend) return;
+    const ok = await run(
+      "commit",
+      async (w) => {
+        if (opts.stageAll) await api.gitStage(w, []);
+        await api.gitCommit(w, msg, !!opts.amend);
+        if (opts.thenPush) await api.gitPush(w);
+      },
+      () => (opts.thenPush ? "Committed and pushed" : opts.amend ? "Amended the last commit" : "Committed"),
+    );
+    if (ok) setMessage("");
+  };
+  const commitLabel = staged.length > 0 ? `Commit (${staged.length})` : changes.length > 0 ? `Commit all (${changes.length})` : "Commit";
+  const canCommit = !!message.trim() && !busy && conflicted.length === 0 && (staged.length > 0 || changes.length > 0);
+
+  const fileRow = (f: FileStatus, isStaged: boolean) => (
+    <FileRow
+      key={`${isStaged ? "s" : "u"}:${f.path}`}
+      file={f}
+      staged={isStaged}
+      prefix={status.prefix}
+      selected={selection?.kind === "file" && selection.path === f.path && (f.conflicted || selection.staged === isStaged)}
+      onSelect={() => setSelected({ kind: "file", path: f.path, staged: isStaged })}
+      onToggle={() =>
+        void run(isStaged ? "unstage" : "stage", (w) => (isStaged ? api.gitUnstage(w, [f.path]) : api.gitStage(w, [f.path])))
+      }
+      onDiscard={() => void discard([f.path], f.path)}
+    />
+  );
+
+  return (
+    <section aria-label="Changed files" className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-8 shrink-0 items-center justify-between pt-1.5 pl-2.5">
+        <span className="inline-flex items-center gap-2 text-[13px] font-semibold">
+          Changes
+          <span className="rounded bg-selected px-1.5 py-px text-[11px] font-medium text-muted">{conflicted.length + staged.length + changes.length}</span>
+        </span>
+        <span className="flex items-center gap-1">
+          {busy && <Loader2 size={13} className="animate-spin text-faint" />}
+          <button type="button" aria-label="Refresh status" title="Refresh" className="icon-btn h-[26px] w-[26px]" onClick={refresh}>
+            {icons.fetch}
+          </button>
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto pt-1 pb-2">
+        {conflicted.length > 0 && (
+          <>
+            <SectionLabel label="CONFLICTS" count={conflicted.length} tone="text-danger" />
+            {conflicted.map((f) => fileRow(f, false))}
+          </>
+        )}
+        <SectionLabel
+          label="STAGED"
+          count={staged.length}
+          action={staged.length > 0 ? { label: "Unstage all", onClick: () => void run("unstage", (w) => api.gitUnstage(w, [])) } : undefined}
+        />
+        {staged.length === 0 ? <Hint>Tick a change to include it in the next commit.</Hint> : staged.map((f) => fileRow(f, true))}
+        <SectionLabel
+          label="CHANGES"
+          count={changes.length}
+          action={
+            changes.length > 0
+              ? { label: "Stage all", onClick: () => void run("stage", (w) => api.gitStage(w, changes.map((c) => c.path))) }
+              : undefined
+          }
+        />
+        {changes.length === 0 ? <Hint>Nothing else changed.</Hint> : changes.map((f) => fileRow(f, false))}
+      </div>
+      <div className="shrink-0 border-t border-border pt-2.5">
+        <label htmlFor="commit-msg" className="sr-only">
+          Commit message
+        </label>
+        <textarea
+          id="commit-msg"
+          rows={3}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+              e.preventDefault();
+              if (canCommit) void commit({ stageAll: staged.length === 0 });
+            }
+          }}
+          placeholder={`Message (commit on ${current})`}
+          className="block w-full resize-none rounded-[7px] border border-border-strong bg-bg px-2.5 py-2 text-[13px] leading-[18px] outline-none placeholder:text-faint focus:border-accent-line"
+        />
+        <div className="mt-2 flex gap-1.5">
+          <button
+            type="button"
+            disabled={!canCommit}
+            onClick={() => void commit({ stageAll: staged.length === 0 })}
+            title={conflicted.length ? "Resolve conflicts first" : "Commit (Ctrl+Enter)"}
+            className="inline-flex h-[30px] flex-1 items-center justify-center gap-1.5 rounded-[7px] bg-accent text-[13px] font-semibold text-white hover:bg-accent-strong disabled:opacity-50"
+          >
+            {icons.check}
+            {commitLabel}
+          </button>
+          <MenuButton
+            title="More commit options"
+            minWidth={220}
+            className="flex h-[30px] w-[30px] items-center justify-center rounded-[7px] border border-border-strong text-muted hover:bg-hover"
+            items={[
+              {
+                label: "Commit and push",
+                disabled: !canCommit || !status.hasRemote,
+                onSelect: () => void commit({ stageAll: staged.length === 0, thenPush: true }),
+              },
+              { label: "Stage all and commit", disabled: !canCommit, onSelect: () => void commit({ stageAll: true }) },
+              {
+                label: "Amend last commit",
+                disabled: !!busy || log.length === 0,
+                onSelect: () => void commit({ amend: true }),
+                hint: message.trim() ? "new message" : "keep message",
+              },
+              { label: "", separator: true },
+              {
+                label: "Discard all changes",
+                danger: true,
+                disabled: changes.length === 0,
+                onSelect: () => void discard(changes.map((c) => c.path), "Every unstaged change in this workspace."),
+              },
+            ]}
+          >
+            <ChevronDown size={12} strokeWidth={1.8} />
+          </MenuButton>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Main-card half of Source control: toolbar, what changed, history. */
+export function GitMain() {
   const workspaceId = useStore((s) => s.activeWorkspaceId);
   const gitEpoch = useStore((s) => s.gitEpoch);
   const sync = useStore((s) => (s.activeWorkspaceId ? s.sync[s.activeWorkspaceId] : undefined));
-  const { toast, confirm, openReview, reloadTree, bumpGit } = useStore.getState();
-
-  const [status, setStatus] = useState<RepoStatus | null>(null);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [log, setLog] = useState<Commit[]>([]);
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Selection | null>(null);
+  const { toast, confirm, openReview } = useStore.getState();
+  const status = useGit((s) => s.status);
+  const branches = useGit((s) => s.branches);
+  const log = useGit((s) => s.log);
+  const busy = useGit((s) => s.busy);
+  const selected = useGit((s) => s.selected);
+  const reloadKey = useGit((s) => s.reloadKey);
+  const { run, setSelected } = useGit.getState();
   const [branchOpen, setBranchOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
-  const refresh = () => setReloadKey((k) => k + 1);
-
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const st = await api.gitStatus(workspaceId);
-        if (cancelled) return;
-        setStatus(st);
-        if (st.isRepo) {
-          const [b, l] = await Promise.all([api.gitBranches(workspaceId), api.gitLog(workspaceId, 60).catch(() => [] as Commit[])]);
-          if (cancelled) return;
-          setBranches(b);
-          setLog(l);
-        }
-      } catch (e) {
-        if (!cancelled) useStore.getState().toast("error", errorMessage(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, gitEpoch, reloadKey]);
-
-  const run = async (label: string, fn: () => Promise<unknown>, success?: (v: unknown) => string | null) => {
-    if (!workspaceId) return false;
-    setBusy(label);
-    try {
-      const v = await fn();
-      const msg = success?.(v);
-      if (msg) toast(v && typeof v === "object" && "kind" in v && v.kind === "conflicts" ? "error" : "success", msg);
-      await reloadTree();
-      bumpGit();
-      return true;
-    } catch (e) {
-      toast("error", errorMessage(e));
-      refresh();
-      return false;
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const files = useMemo(() => status?.files ?? [], [status]);
-  const conflicted = files.filter((f) => f.conflicted);
-  const staged = files.filter((f) => f.staged && !f.conflicted);
-  const changes = files.filter((f) => f.unstaged && !f.conflicted);
-
-  // Keep the selection while it exists; otherwise fall back to the first change, then the last commit.
-  const selection: Selection | null = useMemo(() => {
-    if (selected?.kind === "commit" && log.some((c) => c.hash === selected.hash)) return selected;
-    if (selected?.kind === "file") {
-      const f = files.find((x) => x.path === selected.path);
-      if (f && (f.conflicted || (selected.staged ? f.staged : f.unstaged))) return selected;
-      if (f) return { kind: "file", path: f.path, staged: !selected.staged };
-    }
-    if (conflicted[0]) return { kind: "file", path: conflicted[0].path, staged: false };
-    if (staged[0]) return { kind: "file", path: staged[0].path, staged: true };
-    if (changes[0]) return { kind: "file", path: changes[0].path, staged: false };
-    return null;
-  }, [selected, files, log, conflicted, staged, changes]);
+  useGitLoader(workspaceId);
 
   if (!workspaceId) return null;
 
-  if (!status) {
+  if (!status || useGit.getState().workspaceId !== workspaceId) {
     return (
       <div className="flex flex-1 items-center justify-center gap-2 text-[13.5px] text-muted">
         <Loader2 size={16} className="animate-spin" /> Reading the repository…
@@ -234,7 +342,7 @@ export function GitView() {
             type="button"
             className="btn-primary mt-5 h-9 px-4"
             disabled={!!busy}
-            onClick={() => void run("init", () => api.gitInit(workspaceId), () => "Repository started")}
+            onClick={() => void run("init", (w) => api.gitInit(w), () => "Repository started")}
           >
             Start a repository
           </button>
@@ -243,6 +351,8 @@ export function GitView() {
     );
   }
 
+  const { files, conflicted } = lists(status);
+  const selection = effectiveSelection(selected, status, log);
   const current = status.branch ?? (status.detached ? `detached at ${status.head?.slice(0, 7) ?? "HEAD"}` : "main");
   const remoteBranches = branches.filter((b) => b.remote);
   const localBranches = branches.filter((b) => !b.remote);
@@ -252,159 +362,15 @@ export function GitView() {
     localBranches.find((b) => b.name === "main" || b.name === "master")?.name ??
     "main";
 
-  const pull = (mode: PullMode) => void run("pull", () => api.gitPull(workspaceId, mode), (v) => describe(v as MergeOutcome));
-  const push = () => void run("push", () => api.gitPush(workspaceId), () => (status.upstream ? "Pushed" : `Published ${current}`));
-
-  const commit = async (opts: { stageAll?: boolean; amend?: boolean; thenPush?: boolean }) => {
-    const msg = message.trim();
-    if (!msg && !opts.amend) return;
-    const ok = await run(
-      "commit",
-      async () => {
-        if (opts.stageAll) await api.gitStage(workspaceId, []);
-        await api.gitCommit(workspaceId, msg, !!opts.amend);
-        if (opts.thenPush) await api.gitPush(workspaceId);
-      },
-      () => (opts.thenPush ? "Committed and pushed" : opts.amend ? "Amended the last commit" : "Committed"),
-    );
-    if (ok) setMessage("");
-  };
-
-  const toggleStage = (f: FileStatus, isStaged: boolean) =>
-    void run(isStaged ? "unstage" : "stage", () => (isStaged ? api.gitUnstage(workspaceId, [f.path]) : api.gitStage(workspaceId, [f.path])));
-
-  const discard = async (paths: string[], label: string) => {
-    const ok = await confirm({
-      title: paths.length === 1 ? "Discard changes?" : `Discard ${paths.length} changes?`,
-      message: `${label}\n\nThis can't be undone.`,
-      confirm: "Discard",
-      danger: true,
-    });
-    if (ok) void run("discard", () => api.gitDiscard(workspaceId, paths));
-  };
-
-  const commitLabel = staged.length > 0 ? `Commit (${staged.length})` : changes.length > 0 ? `Commit all (${changes.length})` : "Commit";
-  const canCommit = !!message.trim() && !busy && conflicted.length === 0 && (staged.length > 0 || changes.length > 0);
+  const pull = (mode: PullMode) => void run("pull", (w) => api.gitPull(w, mode), (v) => describe(v as MergeOutcome));
+  const push = () => void run("push", (w) => api.gitPush(w), () => (status.upstream ? "Pushed" : `Published ${current}`));
   const selectedFile = selection?.kind === "file" ? files.find((f) => f.path === selection.path) : undefined;
   const selectedCommit = selection?.kind === "commit" ? log.find((c) => c.hash === selection.hash) : undefined;
   const fetchedAt = sync?.fetchedAt;
 
-  const fileRow = (f: FileStatus, isStaged: boolean) => (
-    <FileRow
-      key={`${isStaged ? "s" : "u"}:${f.path}`}
-      file={f}
-      staged={isStaged}
-      prefix={status.prefix}
-      selected={selection?.kind === "file" && selection.path === f.path && (f.conflicted || selection.staged === isStaged)}
-      onSelect={() => setSelected({ kind: "file", path: f.path, staged: isStaged })}
-      onToggle={() => toggleStage(f, isStaged)}
-      onDiscard={() => void discard([f.path], f.path)}
-    />
-  );
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      {/* changed files + commit */}
-      <section aria-label="Changed files" className="flex w-[268px] shrink-0 flex-col border-r border-border bg-panel">
-        <div className="flex h-9 shrink-0 items-center justify-between border-b border-border pr-2 pl-3.5">
-          <span className="inline-flex items-center gap-2 text-[13px] font-semibold">
-            Changes
-            <span className="rounded bg-selected px-1.5 py-px text-[11px] font-medium text-muted">{conflicted.length + staged.length + changes.length}</span>
-          </span>
-          <span className="flex items-center gap-1">
-            {busy && <Loader2 size={13} className="animate-spin text-faint" />}
-            <button type="button" aria-label="Refresh status" title="Refresh" className="icon-btn h-[26px] w-[26px]" onClick={refresh}>
-              {icons.fetch}
-            </button>
-          </span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pt-1.5 pb-2">
-          {conflicted.length > 0 && (
-            <>
-              <SectionLabel label="CONFLICTS" count={conflicted.length} tone="text-danger" />
-              {conflicted.map((f) => fileRow(f, false))}
-            </>
-          )}
-          <SectionLabel
-            label="STAGED"
-            count={staged.length}
-            action={staged.length > 0 ? { label: "Unstage all", onClick: () => void run("unstage", () => api.gitUnstage(workspaceId, [])) } : undefined}
-          />
-          {staged.length === 0 ? <Hint>Tick a change to include it in the next commit.</Hint> : staged.map((f) => fileRow(f, true))}
-          <SectionLabel
-            label="CHANGES"
-            count={changes.length}
-            action={
-              changes.length > 0
-                ? { label: "Stage all", onClick: () => void run("stage", () => api.gitStage(workspaceId, changes.map((c) => c.path))) }
-                : undefined
-            }
-          />
-          {changes.length === 0 ? <Hint>Nothing else changed.</Hint> : changes.map((f) => fileRow(f, false))}
-        </div>
-        <div className="shrink-0 border-t border-border p-2.5">
-          <label htmlFor="commit-msg" className="sr-only">
-            Commit message
-          </label>
-          <textarea
-            id="commit-msg"
-            rows={3}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                e.preventDefault();
-                if (canCommit) void commit({ stageAll: staged.length === 0 });
-              }
-            }}
-            placeholder={`Message (commit on ${current})`}
-            className="block w-full resize-none rounded-[7px] border border-border-strong bg-bg px-2.5 py-2 text-[13px] leading-[18px] outline-none placeholder:text-faint focus:border-accent-line"
-          />
-          <div className="mt-2 flex gap-1.5">
-            <button
-              type="button"
-              disabled={!canCommit}
-              onClick={() => void commit({ stageAll: staged.length === 0 })}
-              title={conflicted.length ? "Resolve conflicts first" : "Commit (Ctrl+Enter)"}
-              className="inline-flex h-[30px] flex-1 items-center justify-center gap-1.5 rounded-[7px] bg-accent text-[13px] font-semibold text-white hover:bg-accent-strong disabled:opacity-50"
-            >
-              {icons.check}
-              {commitLabel}
-            </button>
-            <MenuButton
-              title="More commit options"
-              minWidth={220}
-              className="flex h-[30px] w-[30px] items-center justify-center rounded-[7px] border border-border-strong text-muted hover:bg-hover"
-              items={[
-                {
-                  label: "Commit and push",
-                  disabled: !canCommit || !status.hasRemote,
-                  onSelect: () => void commit({ stageAll: staged.length === 0, thenPush: true }),
-                },
-                { label: "Stage all and commit", disabled: !canCommit, onSelect: () => void commit({ stageAll: true }) },
-                {
-                  label: "Amend last commit",
-                  disabled: !!busy || log.length === 0,
-                  onSelect: () => void commit({ amend: true }),
-                  hint: message.trim() ? "new message" : "keep message",
-                },
-                { label: "", separator: true },
-                {
-                  label: "Discard all changes",
-                  danger: true,
-                  disabled: changes.length === 0,
-                  onSelect: () => void discard(changes.map((c) => c.path), "Every unstaged change in this workspace."),
-                },
-              ]}
-            >
-              <ChevronDown size={12} strokeWidth={1.8} />
-            </MenuButton>
-          </div>
-        </div>
-      </section>
-
-      {/* center: what changed */}
-      <section aria-label="Review changes" className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
+      <section aria-label="Review changes" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3">
           <button
             type="button"
@@ -420,7 +386,7 @@ export function GitView() {
           <span className="mx-1 h-3.5 w-px bg-sep" aria-hidden />
           <ToolbarButton
             disabled={!!busy || !status.hasRemote}
-            onClick={() => void run("fetch", () => api.gitFetch(workspaceId), () => "Fetched")}
+            onClick={() => void run("fetch", (w) => api.gitFetch(w), () => "Fetched")}
             title={status.hasRemote ? "Fetch from the remote" : "No remote configured"}
           >
             {busy === "fetch" ? <Loader2 size={14} className="animate-spin" /> : icons.fetch}
@@ -457,11 +423,7 @@ export function GitView() {
           </ToolbarButton>
           <div className="flex-1" />
           <span className="truncate text-[12px] whitespace-nowrap text-faint">
-            {!status.hasRemote
-              ? "No remote · local only"
-              : status.upstream
-                ? `${status.upstream} · fetched ${timeAgo(fetchedAt)}`
-                : "Not published yet"}
+            {!status.hasRemote ? "No remote · local only" : status.upstream ? `${status.upstream} · fetched ${timeAgo(fetchedAt)}` : "Not published yet"}
           </span>
         </div>
 
@@ -472,19 +434,19 @@ export function GitView() {
             base={base}
             onClose={() => setBranchOpen(false)}
             actions={{
-              checkout: (name) => void run("checkout", () => api.gitCheckout(workspaceId, name), () => `Switched to ${name}`),
-              create: (name) => void run("branch", () => api.gitCreateBranch(workspaceId, name, null, true), () => `Created ${name}`),
+              checkout: (name) => void run("checkout", (w) => api.gitCheckout(w, name), () => `Switched to ${name}`),
+              create: (name) => void run("branch", (w) => api.gitCreateBranch(w, name, null, true), () => `Created ${name}`),
               merge: async (name) => {
                 const ok = await confirm({
                   title: `Merge ${name} into ${current}?`,
                   message: "If both sides changed the same request, the conflicts are listed here for you to resolve.",
                   confirm: "Merge",
                 });
-                if (ok) void run("merge", () => api.gitMerge(workspaceId, name, false), (v) => describe(v as MergeOutcome));
+                if (ok) void run("merge", (w) => api.gitMerge(w, name, false), (v) => describe(v as MergeOutcome));
               },
               remove: async (name) => {
                 const ok = await confirm({ title: `Delete ${name}?`, message: "Commits that are only on this branch would be lost.", confirm: "Delete", danger: true });
-                if (ok) void run("delete", () => api.gitDeleteBranch(workspaceId, name, false), () => `Deleted ${name}`);
+                if (ok) void run("delete", (w) => api.gitDeleteBranch(w, name, false), () => `Deleted ${name}`);
               },
               compare: (b) => void openReview(b, current),
               openPullRequest: async (b) => {
@@ -511,14 +473,14 @@ export function GitView() {
                   : "All conflicts are resolved. Continue to finish."}
               </div>
             </div>
-            <button type="button" className="btn h-8" disabled={!!busy} onClick={() => void run("abort", () => api.gitAbort(workspaceId), () => "Aborted")}>
+            <button type="button" className="btn h-8" disabled={!!busy} onClick={() => void run("abort", (w) => api.gitAbort(w), () => "Aborted")}>
               Abort
             </button>
             <button
               type="button"
               className="btn-primary h-8"
               disabled={!!busy || conflicted.length > 0}
-              onClick={() => void run("continue", () => api.gitContinue(workspaceId), () => (status.rebasing ? "Rebase finished" : "Merge finished"))}
+              onClick={() => void run("continue", (w) => api.gitContinue(w), () => (status.rebasing ? "Rebase finished" : "Merge finished"))}
             >
               Continue
             </button>
@@ -532,7 +494,7 @@ export function GitView() {
             file={selectedFile}
             staged={selection.staged && !selectedFile.conflicted}
             prefix={status.prefix}
-            onResolve={(how) => void run("resolve", () => api.gitResolve(workspaceId, selectedFile.path, how))}
+            onResolve={(how) => void run("resolve", (w) => api.gitResolve(w, selectedFile.path, how))}
           />
         ) : selectedCommit ? (
           <CommitDetail key={selectedCommit.hash} workspaceId={workspaceId} commit={selectedCommit} />
@@ -541,7 +503,6 @@ export function GitView() {
         )}
       </section>
 
-      {/* right: history */}
       <aside aria-label="History" className="flex w-[276px] shrink-0 flex-col border-l border-border bg-panel">
         <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border pr-3 pl-3.5">
           <span className="text-[13px] font-semibold">History</span>
@@ -561,7 +522,7 @@ export function GitView() {
                 className={cx("relative flex w-full gap-2.5 rounded-[7px] p-2 text-left", sel ? "bg-selected" : "hover:bg-hover")}
               >
                 <span className="relative w-3 shrink-0 self-stretch" aria-hidden>
-                  {i < log.length - 1 && <span className="absolute top-3.5 -bottom-4 left-[5px] w-0.5 bg-selected" />}
+                  {i < log.length - 1 && <span className="absolute top-3.5 -bottom-4 left-[5px] w-0.5 bg-border-mid" />}
                   <span
                     className={cx(
                       "absolute top-1 left-px h-2.5 w-2.5 rounded-full border-2 border-panel",

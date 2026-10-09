@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 // Fonts ship with the app (the desktop build works offline).
-import "@fontsource-variable/schibsted-grotesk";
+import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./globals.css";
 

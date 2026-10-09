@@ -1,13 +1,12 @@
 "use client";
 
-import { FileText, GitCompare, GitPullRequest, Play, Plus, Settings2, SlidersHorizontal, X } from "lucide-react";
+import { FileText, GitCompare, GitPullRequest, Play, Plus, Settings2, X } from "lucide-react";
 
 import { tabDirty, useStore, useWorkspaceTabs, type Tab } from "@/lib/store";
 import { cx } from "@/lib/util";
 
 import { useContextMenu } from "../ui/Menu";
 import { DiffView } from "./DiffView";
-import { EnvironmentEditor } from "./EnvironmentEditor";
 import { GroupEditor } from "./GroupEditor";
 import { RequestView } from "./RequestView";
 import { ReviewView } from "./ReviewView";
@@ -28,8 +27,6 @@ function tabTitle(tab: Tab): { icon: React.ReactNode; title: string; hint: strin
       return { icon: <RequestIcon />, title: tab.draft.name || "Untitled", hint: `${tab.draft.method} ${tab.draft.url}` };
     case "group":
       return { icon: <Settings2 size={15} strokeWidth={1.4} />, title: tab.draft.name, hint: "Collection settings" };
-    case "environment":
-      return { icon: <SlidersHorizontal size={15} strokeWidth={1.4} />, title: tab.draft.name, hint: "Environment" };
     case "runner":
       return { icon: <Play size={15} strokeWidth={1.4} />, title: `Run ${tab.groupName}`, hint: "Collection run" };
     case "review":
@@ -110,7 +107,6 @@ export function MainArea() {
         {!active && <Welcome />}
         {active?.kind === "request" && <RequestView key={active.id} tab={active} />}
         {active?.kind === "group" && <GroupEditor key={active.id} tab={active} />}
-        {active?.kind === "environment" && <EnvironmentEditor key={active.id} tab={active} />}
         {active?.kind === "runner" && <RunnerView key={active.id} tab={active} />}
         {active?.kind === "review" && <ReviewView key={active.id} tab={active} />}
         {active?.kind === "diff" && (

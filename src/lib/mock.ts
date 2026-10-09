@@ -3,6 +3,8 @@
 // previewed without Tauri; it doesn't send real HTTP requests or run git.
 
 import type {
+  AgentActivity,
+  AgentPermissions,
   Branch,
   Commit,
   Environment,
@@ -94,6 +96,7 @@ function seed(): MockWorkspace[] {
       }),
     ),
     r(req("Get order", "GET", "{{baseUrl}}/v1/orders/{{orderId}}")),
+    r(req("Order receipt", "GET", "{{baseUrl}}/v1/orders/{{orderId}}/receipt", { headers: [kv("Accept", "text/html")] })),
     r(req("Cancel order", "DELETE", "{{baseUrl}}/v1/orders/{{orderId}}")),
   ]);
   const admin = group("Admin", [
@@ -120,15 +123,22 @@ function seed(): MockWorkspace[] {
   const webhooks = group("Webhooks", [r(req("Stripe webhook", "POST", "{{baseUrl}}/webhooks/stripe"))]);
   [orders, customers, auth, webhooks].forEach((c, i) => (c.meta.seq = i + 1));
 
-  const env = (name: string, vars: [string, string, boolean?][], overrides: Record<string, string> = {}): EnvironmentView => ({
+  const env = (
+    name: string,
+    vars: [string, string, boolean?][],
+    overrides: Record<string, string> = {},
+    opts: { shared?: boolean; protected?: boolean } = {},
+  ): EnvironmentView => ({
     id: uid(),
     name,
     variables: vars.map(([key, value, secret]) => ({ key, value, enabled: true, secret: !!secret })),
     overrides,
+    shared: opts.shared ?? true,
+    protected: opts.protected,
   });
-  const local = env("Local", [["baseUrl", "http://localhost:8080"], ["customerId", "cus_204"], ["apiToken", "dev-token", true]], { orderId: "ord_841" });
-  const staging = env("Staging", [["baseUrl", "https://api.staging.acme.dev"], ["customerId", "cus_9fA3kL2"], ["apiToken", "stg-token", true]]);
-  const production = env("Production", [["baseUrl", "https://api.acme.dev"], ["customerId", "cus_1a77b0"], ["apiToken", "prod-token", true]]);
+  const local = env("Local", [["baseUrl", "http://localhost:8080"], ["customerId", "cus_204"], ["orderId", ""], ["apiToken", "dev-token", true]], { orderId: "ord_841" }, { shared: false });
+  const staging = env("Staging", [["baseUrl", "https://api.staging.acme.dev"], ["customerId", "cus_9fA3kL2"], ["orderId", ""], ["apiToken", "stg-token", true]]);
+  const production = env("Production", [["baseUrl", "https://api.acme.dev"], ["customerId", "cus_1a77b0"], ["apiToken", "prod-token", true]], {}, { protected: true });
 
   const mk = (name: string, team: string | null, path: string, collections: MockGroup[], environments: EnvironmentView[]): MockWorkspace => {
     const id = uid();
@@ -183,6 +193,19 @@ function seed(): MockWorkspace[] {
 const db = {
   workspaces: seed(),
   active: null as string | null,
+  permissions: {
+    editRequests: true,
+    runRequests: true,
+    readResponses: true,
+    editEnvironments: false,
+    readSecrets: false,
+  } as AgentPermissions,
+  activity: [
+    { kind: "created", what: "Request Refund order in Orders API / Admin", client: "Claude Code", at: new Date(Date.now() - 2 * 60_000).toISOString() },
+    { kind: "edited", what: "Request Create order in Orders API / Orders", client: "Claude Code", at: new Date(Date.now() - 4 * 60_000).toISOString() },
+    { kind: "ran", what: "4 requests in Orders API, 4 passed", client: "Claude Code", at: new Date(Date.now() - 6 * 60_000).toISOString() },
+    { kind: "edited", what: "Environment Local", client: "Cursor", at: new Date(Date.now() - 62 * 60_000).toISOString() },
+  ] as AgentActivity[],
 };
 db.active = db.workspaces[0].entry.id;
 
@@ -273,9 +296,12 @@ function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: 
       source: i < chain.length ? (i === 0 ? `collection:${chain[0].meta.name}` : `folder:${chain[i].meta.name}`) : "request",
     })),
   );
+  const html = /\/receipt\b/.test(url) || headers.some((h) => h.key.toLowerCase() === "accept" && h.value.includes("text/html"));
   const responseBody =
     status === 204
       ? ""
+      : html
+        ? '<!doctype html><html><body style="font-family: Georgia, serif; padding: 24px 28px"><h1>Order ord_841</h1><p>Status: pending · Total €24.00</p><p><a href="https://example.com/receipt.pdf">Download receipt</a></p><script>document.body.append("scripts run?")</script></body></html>'
       : JSON.stringify(
           {
             id: "ord_" + Math.floor(Math.random() * 1000),
@@ -298,7 +324,7 @@ function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: 
       statusText: status === 201 ? "Created" : status === 204 ? "No Content" : "OK",
       httpVersion: "HTTP/1.1",
       headers: [
-        { key: "content-type", value: "application/json" },
+        { key: "content-type", value: html ? "text/html; charset=utf-8" : "application/json" },
         { key: "x-request-id", value: uid() },
         { key: "date", value: new Date().toUTCString() },
       ],
@@ -439,6 +465,47 @@ function recordHistory(w: MockWorkspace, run: RunResult, envId: string | null) {
 type Args = Record<string, unknown>;
 const s = (a: Args, k: string) => a[k] as string;
 
+/** A small subset of the Rust importer, enough for the browser preview. */
+function importPostman(w: MockWorkspace, json: string) {
+  let v: Record<string, unknown>;
+  try {
+    v = JSON.parse(json);
+  } catch (e) {
+    throw new Error(`not valid JSON: ${(e as Error).message}`);
+  }
+  const summary = { collections: [] as string[], environments: [] as string[], requests: 0, warnings: [] as string[] };
+  type PmItem = { name?: string; item?: PmItem[]; request?: { method?: string; url?: string | { raw?: string } } | string };
+  const toItems = (items: PmItem[]): MockItem[] =>
+    items.map((it) => {
+      if (it.item) return f(group(it.name || "Folder", toItems(it.item)));
+      const rq = it.request;
+      const method = typeof rq === "string" ? "GET" : (rq?.method || "GET").toUpperCase();
+      const url = typeof rq === "string" ? rq : typeof rq?.url === "string" ? rq.url : (rq?.url?.raw ?? "");
+      summary.requests++;
+      return r(req(it.name || "Untitled request", method, url.split("?")[0]));
+    });
+  if (v.info && Array.isArray(v.item)) {
+    const info = v.info as { name?: string };
+    const c = group(info.name || "Imported collection", toItems(v.item as PmItem[]), { seq: w.collections.length + 1 });
+    w.collections.push(c);
+    summary.collections.push(c.meta.id);
+  } else if (Array.isArray(v.values)) {
+    const values = v.values as { key: string; value?: string; enabled?: boolean; type?: string }[];
+    const name = (v.name as string) || "Imported environment";
+    w.environments.push({
+      id: uid(),
+      name,
+      variables: values.map((x) => ({ key: x.key, value: String(x.value ?? ""), enabled: x.enabled !== false, secret: x.type === "secret" })),
+      overrides: {},
+      shared: true,
+    });
+    summary.environments.push(name);
+  } else {
+    throw new Error("this isn't a Postman collection (v2.0 or v2.1) or environment export");
+  }
+  return summary;
+}
+
 const handlers: Record<string, (a: Args) => unknown> = {
   app_info: () => ({ version: "0.1.0-preview", gitVersion: "git version 2.47.0", mcpCommand: "/usr/bin/trax-mcp", configDir: "~/.config/http-trax", platform: "browser" }),
   list_workspaces: () => ({ workspaces: db.workspaces.map((w) => structuredClone(w.entry)), activeWorkspace: db.active }),
@@ -565,9 +632,54 @@ const handlers: Record<string, (a: Args) => unknown> = {
     if (!env.id) env.id = uid();
     const existing = w.environments.find((e) => e.id === env.id);
     if (existing) Object.assign(existing, env);
-    else w.environments.push({ ...env, overrides: {} });
+    else w.environments.push({ ...env, overrides: {}, shared: true });
     return env;
   },
+  set_environment_shared: (a) => {
+    const env = ws(a.workspaceId).environments.find((e) => e.id === a.id);
+    if (!env) throw new Error("environment not found");
+    env.shared = !!a.shared;
+    return structuredClone(env);
+  },
+  import_json: (a) => importPostman(ws(a.workspaceId), s(a, "json")),
+  agent_overview: (a) => {
+    const now = Date.now();
+    const session = (pid: number, client: string, clientId: string, ago: number) => ({
+      pid,
+      client,
+      clientId,
+      version: "2.1.0",
+      startedAt: new Date(now - 40 * 60_000).toISOString(),
+      lastSeen: new Date(now - ago).toISOString(),
+    });
+    const code = session(4112, "Claude Code", "claude-code", 12_000);
+    const cursor = session(4380, "Cursor", "cursor-vscode", 25_000);
+    return {
+      permissions: { ...db.permissions },
+      sessions: [code, cursor],
+      clients: [
+        { id: "code", name: "Claude Code", status: "connected", configPath: "~/.claude.json", session: code },
+        { id: "desktop", name: "Claude Desktop, Cursor, Windsurf", status: "connected", configPath: "~/.cursor/mcp.json", session: cursor },
+        { id: "vscode", name: "VS Code", status: "not-set-up", configPath: null, session: null },
+      ],
+      activity: a.workspaceId === db.workspaces[0].entry.id ? structuredClone(db.activity) : [],
+    };
+  },
+  set_agent_permissions: (a) => (db.permissions = { ...(a.permissions as AgentPermissions) }),
+  workspace_summaries: () =>
+    db.workspaces.map((w, i) => {
+      const count = (g: MockGroup): number => g.items.reduce((n, it) => n + (it.kind === "request" ? 1 : count(it.group)), 0);
+      const isRepo = i < 3;
+      return {
+        id: w.entry.id,
+        exists: true,
+        requests: w.collections.reduce((n, c) => n + count(c), 0),
+        collections: w.collections.length,
+        isRepo,
+        remote: isRepo ? `git@github.com:acme/${w.entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.git` : null,
+        members: [4, 9, 3][i] ?? null,
+      };
+    }),
   delete_environment: (a) => {
     const w = ws(a.workspaceId);
     w.environments = w.environments.filter((e) => e.id !== a.id);

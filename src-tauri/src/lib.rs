@@ -1,5 +1,6 @@
 //! http-trax desktop app (Tauri 2).
 
+mod agent_commands;
 mod commands;
 mod git_commands;
 mod state;
@@ -27,6 +28,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            agent_commands::agent_overview,
+            agent_commands::set_agent_permissions,
+            agent_commands::workspace_summaries,
+            commands::set_environment_shared,
+            commands::import_json,
             commands::app_info,
             commands::list_workspaces,
             commands::create_workspace,

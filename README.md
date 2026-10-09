@@ -17,11 +17,14 @@ The app's interface carries the name **Courion**. The project, installers, binar
 - **Scripts.** JavaScript pre-request and post-response scripts at request, folder and collection level, with tests and assertions (`trax.test`, `trax.expect`), variable chaining, and a Postman-compatible `pm.*` subset. Scripts run in a sandbox with no file or network access.
 - **Saved responses.** Keep known-good responses as examples on a request. They're committed with the workspace.
 - **Readable reviews.** Source control shows what changed in a request or environment ("URL changed", "Header added", "Test added") instead of raw YAML, with the line diff one click away.
-- **Fast to drive from the keyboard.** Ctrl+K searches every request and command, Ctrl+N creates a request, and a pasted cURL command becomes a request. Recent runs are listed under History.
-- **Environments done right for git.** Shared values are committed; secrets and values your scripts set (like fresh tokens) stay on your machine.
-- **MCP server for AI agents.** `trax-mcp` ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git.
+- **Fast to drive from the keyboard.** Ctrl+K searches every request and command (Ctrl+. for actions), Ctrl+N creates a request, and a pasted cURL command becomes a request. Recent runs are listed under History, HTML responses can be previewed safely.
+- **Environments done right for git.** Shared values are committed; secrets and values your scripts set (like fresh tokens) stay on your machine. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
+- **MCP server for AI agents.** `trax-mcp` ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
+- **Bring your Postman collections.** Import Postman collections and environments; `pm.*` scripts keep working.
 
 ![Source control](docs/screenshots/source-control.png)
+
+![AI agents](docs/screenshots/agents.png)
 
 ## Install
 

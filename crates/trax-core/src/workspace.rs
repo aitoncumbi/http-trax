@@ -5,6 +5,7 @@
 //!   trax.yaml                        workspace manifest (marks the directory)
 //!   .gitignore                       ignores .trax/
 //!   .trax/state.json                 local only: runtime vars, overrides, secrets
+//!   .trax/environments/<slug>.env.yaml   environments kept off git
 //!   collections/<slug>/collection.yaml
 //!   collections/<slug>/<request>.req.yaml
 //!   collections/<slug>/<folder>/folder.yaml
@@ -507,15 +508,30 @@ impl Workspace {
 
     // ----------------------------------------------------- environments
 
-    fn env_files(&self) -> Result<Vec<PathBuf>> {
-        let dir = self.root.join(ENVIRONMENTS_DIR);
-        if !dir.is_dir() {
-            return Ok(Vec::new());
+    fn env_dir(&self, shared: bool) -> PathBuf {
+        if shared {
+            self.root.join(ENVIRONMENTS_DIR)
+        } else {
+            self.root.join(LOCAL_DIR).join(ENVIRONMENTS_DIR)
         }
-        Ok(read_dir_sorted(&dir)?
-            .into_iter()
-            .filter(|p| p.to_string_lossy().ends_with(ENV_SUFFIX))
-            .collect())
+    }
+
+    /// Environment files with whether each is shared (committed).
+    fn env_files(&self) -> Result<Vec<(PathBuf, bool)>> {
+        let mut out = Vec::new();
+        for shared in [true, false] {
+            let dir = self.env_dir(shared);
+            if !dir.is_dir() {
+                continue;
+            }
+            out.extend(
+                read_dir_sorted(&dir)?
+                    .into_iter()
+                    .filter(|p| p.to_string_lossy().ends_with(ENV_SUFFIX))
+                    .map(|p| (p, shared)),
+            );
+        }
+        Ok(out)
     }
 
     fn environments_collecting(
@@ -524,9 +540,9 @@ impl Workspace {
     ) -> Result<Vec<EnvironmentView>> {
         let state = self.local_state()?;
         let mut out = Vec::new();
-        for path in self.env_files()? {
+        for (path, shared) in self.env_files()? {
             match read_yaml::<Environment>(&path) {
-                Ok(env) => out.push(self.view(env, &state)),
+                Ok(env) => out.push(self.view(env, shared, &state)),
                 Err(e) => problems.push(self.problem(&path, e)),
             }
         }
@@ -534,7 +550,7 @@ impl Workspace {
         Ok(out)
     }
 
-    fn view(&self, mut env: Environment, state: &LocalState) -> EnvironmentView {
+    fn view(&self, mut env: Environment, shared: bool, state: &LocalState) -> EnvironmentView {
         if let Some(secrets) = state.secrets.get(&env.id) {
             for var in env.variables.iter_mut().filter(|v| v.secret) {
                 if let Some(value) = secrets.get(&var.key) {
@@ -546,6 +562,7 @@ impl Workspace {
         EnvironmentView {
             environment: env,
             overrides,
+            shared,
         }
     }
 
@@ -553,11 +570,11 @@ impl Workspace {
         self.environments_collecting(&mut Vec::new())
     }
 
-    fn find_env_path(&self, id: &str) -> Result<Option<PathBuf>> {
-        for path in self.env_files()? {
+    fn find_env_path(&self, id: &str) -> Result<Option<(PathBuf, bool)>> {
+        for (path, shared) in self.env_files()? {
             if let Ok(env) = read_yaml::<Environment>(&path) {
                 if env.id == id {
-                    return Ok(Some(path));
+                    return Ok(Some((path, shared)));
                 }
             }
         }
@@ -565,10 +582,10 @@ impl Workspace {
     }
 
     pub fn environment(&self, id: &str) -> Result<EnvironmentView> {
-        let path = self
+        let (path, shared) = self
             .find_env_path(id)?
             .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
-        Ok(self.view(read_yaml(&path)?, &self.local_state()?))
+        Ok(self.view(read_yaml(&path)?, shared, &self.local_state()?))
     }
 
     /// Find an environment by id or (case-insensitive) name.
@@ -604,19 +621,30 @@ impl Workspace {
             }
         })?;
         let path = match self.find_env_path(&env.id)? {
-            Some(path) => path,
-            None => unique_path(
-                &self.root.join(ENVIRONMENTS_DIR),
-                &slugify(&env.name),
-                ENV_SUFFIX,
-            ),
+            Some((path, _)) => path,
+            None => unique_path(&self.env_dir(true), &slugify(&env.name), ENV_SUFFIX),
         };
         write_yaml(&path, &shared)?;
         Ok(env)
     }
 
+    /// Move an environment between `environments/` (committed and shared with
+    /// the team) and `.trax/environments/` (this machine only).
+    pub fn set_environment_shared(&self, id: &str, shared: bool) -> Result<EnvironmentView> {
+        let (path, is_shared) = self
+            .find_env_path(id)?
+            .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+        if is_shared != shared {
+            let env: Environment = read_yaml(&path)?;
+            let target = unique_path(&self.env_dir(shared), &slugify(&env.name), ENV_SUFFIX);
+            write_yaml(&target, &env)?;
+            fs::remove_file(&path).at(&path)?;
+        }
+        self.environment(id)
+    }
+
     pub fn delete_environment(&self, id: &str) -> Result<()> {
-        let path = self
+        let (path, _) = self
             .find_env_path(id)?
             .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
         fs::remove_file(&path).at(&path)?;
@@ -900,6 +928,49 @@ mod tests {
         assert_eq!(name, "Dev");
         assert_eq!(vars["baseUrl"], "http://127.0.0.1:9000");
         assert_eq!(ws.find_environment("dev").unwrap().environment.id, env.id);
+    }
+
+    #[test]
+    fn environments_can_stay_off_git_and_be_protected() {
+        let (_dir, ws) = ws();
+        let mut env = Environment::new("Production");
+        env.protected = true;
+        env.variables
+            .push(Variable::new("baseUrl", "https://api.example.com"));
+        let env = ws.save_environment(&env).unwrap();
+        let view = ws.environment(&env.id).unwrap();
+        assert!(view.shared && view.environment.protected);
+        let shared_path = ws.root().join("environments/production.env.yaml");
+        assert!(fs::read_to_string(&shared_path)
+            .unwrap()
+            .contains("protected: true"));
+
+        let view = ws.set_environment_shared(&env.id, false).unwrap();
+        assert!(!view.shared);
+        assert!(!shared_path.exists());
+        assert!(ws
+            .root()
+            .join(".trax/environments/production.env.yaml")
+            .exists());
+        // Edits stay where the environment lives.
+        let mut edited = view.environment.clone();
+        edited.variables[0].value = "https://api2.example.com".into();
+        ws.save_environment(&edited).unwrap();
+        assert!(!shared_path.exists());
+        assert_eq!(ws.environments().unwrap().len(), 1);
+        assert_eq!(
+            ws.effective_environment(&env.id).unwrap().1["baseUrl"],
+            "https://api2.example.com"
+        );
+
+        let view = ws.set_environment_shared(&env.id, true).unwrap();
+        assert!(view.shared && shared_path.exists());
+        assert!(!ws
+            .root()
+            .join(".trax/environments/production.env.yaml")
+            .exists());
+        ws.delete_environment(&env.id).unwrap();
+        assert!(ws.environments().unwrap().is_empty());
     }
 
     #[test]

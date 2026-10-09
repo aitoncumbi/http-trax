@@ -186,7 +186,7 @@ export function RequestView({ tab }: { tab: RequestTab }) {
           onClick={() => void sendTab(tab.id)}
           disabled={tab.running}
           title="Send (Ctrl+Enter)"
-          className="inline-flex h-9 items-center gap-[9px] rounded-lg bg-accent pr-3.5 pl-3 text-[13.5px] font-semibold text-white shadow-[0_0_0_1px_rgba(91,147,255,0.3)] hover:bg-accent-strong disabled:opacity-70"
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-accent bg-accent px-3.5 text-[13.5px] font-medium text-white hover:border-accent-strong hover:bg-accent-strong disabled:opacity-70"
         >
           {tab.running ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} strokeWidth={1.8} />}
           Send
@@ -197,8 +197,8 @@ export function RequestView({ tab }: { tab: RequestTab }) {
           disabled={!dirty}
           title="Save (Ctrl+S)"
           className={cx(
-            "inline-flex h-9 items-center gap-[9px] rounded-lg border px-3.5 text-[13.5px] font-medium",
-            dirty ? "border-accent-line text-text hover:bg-hover" : "border-border-strong text-muted",
+            "inline-flex h-9 items-center gap-2 rounded-lg border px-3.5 text-[13.5px] font-medium",
+            dirty ? "border-accent-line text-text hover:bg-hover" : "border-border-strong text-text hover:bg-hover",
           )}
         >
           <Save size={15} strokeWidth={1.4} />

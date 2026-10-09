@@ -5,16 +5,20 @@
 // UI can be developed and previewed without building the Rust side.
 
 import type {
+  AgentOverview,
+  AgentPermissions,
   AppInfo,
   Branch,
   CollectionRun,
   Commit,
   Environment,
+  EnvironmentView,
   FileChanges,
   GroupMeta,
   HistoryEntry,
   GroupNode,
   Identity,
+  ImportSummary,
   LocalState,
   MergeOutcome,
   PullMode,
@@ -30,6 +34,7 @@ import type {
   WorkspaceEntry,
   WorkspaceManifest,
   WorkspacePrefs,
+  WorkspaceSummary,
   WorkspaceTree,
 } from "./types";
 
@@ -109,6 +114,16 @@ export const api = {
     call<SavedResponse>("save_response", { workspaceId, requestId, name, run }),
   deleteSavedResponse: (workspaceId: string, requestId: string, responseId: string) =>
     call<void>("delete_saved_response", { workspaceId, requestId, responseId }),
+
+  // environments: git and protection
+  setEnvironmentShared: (workspaceId: string, id: string, shared: boolean) =>
+    call<EnvironmentView>("set_environment_shared", { workspaceId, id, shared }),
+  importJson: (workspaceId: string, json: string) => call<ImportSummary>("import_json", { workspaceId, json }),
+
+  // agents
+  agentOverview: (workspaceId: string | null) => call<AgentOverview>("agent_overview", { workspaceId }),
+  setAgentPermissions: (permissions: AgentPermissions) => call<AgentPermissions>("set_agent_permissions", { permissions }),
+  workspaceSummaries: () => call<WorkspaceSummary[]>("workspace_summaries"),
 
   // history
   getHistory: (workspaceId: string) => call<HistoryEntry[]>("get_history", { workspaceId }),

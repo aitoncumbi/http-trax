@@ -290,8 +290,106 @@ function groupOptions(collections: GroupNode[]): { id: string; label: string }[]
   return out;
 }
 
-function ImportDialog() {
+function PostmanImport({ close }: { close: () => void }) {
+  const workspaceId = useStore((s) => s.activeWorkspaceId);
+  const { reloadTree, bumpGit, toast, setView } = useStore.getState();
+  const [text, setText] = useState("");
+  const [file, setFile] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <form
+      className="space-y-4 p-5"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!workspaceId || !text.trim()) return;
+        setBusy(true);
+        setError(null);
+        try {
+          const summary = await api.importJson(workspaceId, text);
+          await reloadTree();
+          bumpGit();
+          close();
+          const what = summary.collections.length
+            ? `${summary.requests} request${summary.requests === 1 ? "" : "s"} imported`
+            : `Environment ${summary.environments.join(", ")} imported`;
+          toast("success", summary.warnings.length ? `${what}. ${summary.warnings.length} note(s): ${summary.warnings.join(" ")}` : what);
+          setView(summary.collections.length ? "collections" : "environments");
+        } catch (err) {
+          setError(errorMessage(err));
+          setBusy(false);
+        }
+      }}
+    >
+      <p className="text-[13px] leading-[19px] text-muted">
+        Export a collection (v2.1) or an environment from Postman, then pick the file or paste its JSON. Scripts keep working: the{" "}
+        <span className="font-mono text-[12px]">pm.*</span> API is supported.
+      </p>
+      <label className="flex h-[72px] cursor-pointer items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong text-[13.5px] text-text-2 hover:bg-hover">
+        <input
+          type="file"
+          accept=".json,application/json"
+          className="sr-only"
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            setFile(f.name);
+            setText(await f.text());
+          }}
+        />
+        {file ? <span className="font-mono text-[12.5px]">{file}</span> : "Choose a .json export"}
+      </label>
+      <div>
+        <label htmlFor="postman-json" className="label">
+          Or paste JSON
+        </label>
+        <textarea
+          id="postman-json"
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setFile(null);
+          }}
+          spellCheck={false}
+          placeholder='{ "info": { "name": "Orders API", ... }, "item": [ ... ] }'
+          className="input h-28 resize-none py-2.5 font-mono text-[12.5px] leading-[19px]"
+        />
+      </div>
+      {error && <p className="text-[12.5px] text-danger">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button type="button" className="btn" onClick={close}>
+          Cancel
+        </button>
+        <button type="submit" className="btn-primary" disabled={!text.trim() || busy || !workspaceId}>
+          Import
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ImportDialog({ initialTab }: { initialTab?: "curl" | "postman" }) {
   const close = useStore((s) => s.closeDialog);
+  const [tab, setTab] = useState<"curl" | "postman">(initialTab ?? "curl");
+  return (
+    <Modal title="Import" onClose={close} width={620}>
+      <div className="flex items-center gap-3 px-5 pt-4">
+        <div role="group" aria-label="Import from" className="segmented">
+          <button type="button" aria-pressed={tab === "curl"} onClick={() => setTab("curl")}>
+            cURL command
+          </button>
+          <button type="button" aria-pressed={tab === "postman"} onClick={() => setTab("postman")}>
+            Postman export
+          </button>
+        </div>
+      </div>
+      {tab === "curl" ? <CurlImport close={close} /> : <PostmanImport close={close} />}
+    </Modal>
+  );
+}
+
+function CurlImport({ close }: { close: () => void }) {
   const tree = useStore((s) => s.tree);
   const activeTab = useStore((s) => s.tabs.find((t) => t.id === (s.activeWorkspaceId ? s.activeTab[s.activeWorkspaceId] : null)));
   const importRequest = useStore((s) => s.importRequest);
@@ -319,7 +417,7 @@ function ImportDialog() {
   }
 
   return (
-    <Modal title="Import from cURL" onClose={close} width={620}>
+    <>
       <form
         className="space-y-4 p-5"
         onSubmit={async (e) => {
@@ -386,7 +484,7 @@ function ImportDialog() {
           </button>
         </div>
       </form>
-    </Modal>
+    </>
   );
 }
 
@@ -401,6 +499,6 @@ export function Dialogs() {
     case "workspace":
       return <WorkspaceDialog mode={dialog.mode} />;
     case "import":
-      return <ImportDialog />;
+      return <ImportDialog initialTab={dialog.tab} />;
   }
 }

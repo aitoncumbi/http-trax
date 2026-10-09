@@ -612,6 +612,23 @@ impl Git {
         Ok(parse::commits(&self.git(&args)?))
     }
 
+    /// Number of distinct authors (by email) in the last `limit` commits.
+    pub fn contributors(&self, limit: usize) -> Result<usize> {
+        if self.rev("HEAD").is_none() {
+            return Ok(0);
+        }
+        let limit = format!("-n{}", limit.max(1));
+        let out = self.git(&["log", "--format=%ae", limit.as_str()])?;
+        let mut emails: Vec<String> = out
+            .lines()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty())
+            .collect();
+        emails.sort();
+        emails.dedup();
+        Ok(emails.len())
+    }
+
     /// Unified diff of working tree (or index with `staged`) for one path or all.
     pub fn diff(&self, path: Option<&str>, staged: bool) -> Result<String> {
         let root = self.toplevel()?.to_string_lossy().into_owned();

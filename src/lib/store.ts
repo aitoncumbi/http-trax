@@ -6,7 +6,6 @@ import { api, errorMessage, onEvent } from "./api";
 import type {
   AppInfo,
   CollectionRun,
-  Environment,
   GroupMeta,
   Request,
   Review,
@@ -48,13 +47,6 @@ export interface GroupTab extends TabBase {
   base: string;
 }
 
-export interface EnvironmentTab extends TabBase {
-  kind: "environment";
-  envId: string;
-  draft: Environment;
-  base: string;
-}
-
 export interface RunnerTab extends TabBase {
   kind: "runner";
   groupId: string;
@@ -80,7 +72,7 @@ export interface DiffTab extends TabBase {
   text: string;
 }
 
-export type Tab = RequestTab | GroupTab | EnvironmentTab | RunnerTab | ReviewTab | DiffTab;
+export type Tab = RequestTab | GroupTab | RunnerTab | ReviewTab | DiffTab;
 
 export type View = "collections" | "environments" | "history" | "git" | "mcp" | "settings";
 
@@ -98,13 +90,12 @@ export type Dialog =
   | { kind: "prompt"; title: string; label?: string; initial?: string; confirm?: string; resolve: (v: string | null) => void }
   | { kind: "confirm"; title: string; message: string; confirm?: string; danger?: boolean; resolve: (v: boolean) => void }
   | { kind: "workspace"; mode: "create" | "open" | "clone" }
-  | { kind: "import" };
+  | { kind: "import"; tab?: "curl" | "postman" };
 
 export function tabDirty(tab: Tab): boolean {
   switch (tab.kind) {
     case "request":
     case "group":
-    case "environment":
       return stableStringify(tab.draft) !== tab.base;
     default:
       return false;
@@ -192,7 +183,7 @@ interface Actions {
   prompt: (opts: { title: string; label?: string; initial?: string; confirm?: string }) => Promise<string | null>;
   confirm: (opts: { title: string; message: string; confirm?: string; danger?: boolean }) => Promise<boolean>;
   showWorkspaceDialog: (mode: "create" | "open" | "clone") => void;
-  showImportDialog: () => void;
+  showImportDialog: (tab?: "curl" | "postman") => void;
   closeDialog: () => void;
 }
 
@@ -233,6 +224,20 @@ export const useStore = create<Store>()((set, get) => {
     set((s) => ({ tabs: [...s.tabs, tab], activeTab: { ...s.activeTab, [tab.workspaceId]: tab.id }, view: editorView(s.view) }));
 
   const findTab = (pred: (t: Tab) => boolean) => get().tabs.find(pred);
+
+  /** Protected environments (production) need a yes before anything is sent. */
+  const confirmProtected = async (envId: string | null, action: string): Promise<boolean> => {
+    const env = envId ? get().tree?.environments.find((e) => e.id === envId) : undefined;
+    if (!env?.protected) return true;
+    return get().confirm({
+      title: `${action} with ${env.name}?`,
+      message: `${env.name} is a protected environment. Requests go to ${
+        env.overrides.baseUrl ?? env.variables.find((v) => v.key === "baseUrl")?.value ?? "its servers"
+      }.`,
+      confirm: "Send",
+      danger: true,
+    });
+  };
 
   const loadSaved = async (tabId: string) => {
     const tab = findTab((t) => t.id === tabId) as RequestTab | undefined;
@@ -516,14 +521,11 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
 
+    // Environments are edited in the Environments view; picking one there
+    // also makes it the active one (what you see is what requests use).
     openEnvironment: (envId) => {
-      const id = wsId();
-      const env = get().tree?.environments.find((e) => e.id === envId);
-      if (!id || !env) return;
-      const existing = findTab((t) => t.kind === "environment" && t.envId === envId && t.workspaceId === id);
-      if (existing) return get().focusTab(existing.id);
-      const draft: Environment = { id: env.id, name: env.name, variables: env.variables.map((v) => ({ ...v })) };
-      pushTab({ kind: "environment", id: uid(), workspaceId: id, envId, draft, base: stableStringify(draft) });
+      if (get().tree?.environments.some((e) => e.id === envId)) void get().setActiveEnvironment(envId);
+      set({ view: "environments" });
     },
 
     createEnvironment: async () => {
@@ -582,9 +584,6 @@ export const useStore = create<Store>()((set, get) => {
         } else if (tab.kind === "group") {
           await api.updateGroup(tab.workspaceId, tab.draft);
           get().updateTab<GroupTab>(tabId, (t) => ({ ...t, base: stableStringify(t.draft) }));
-        } else if (tab.kind === "environment") {
-          await api.saveEnvironment(tab.workspaceId, tab.draft);
-          get().updateTab<EnvironmentTab>(tabId, (t) => ({ ...t, base: stableStringify(t.draft) }));
         } else {
           return;
         }
@@ -599,6 +598,7 @@ export const useStore = create<Store>()((set, get) => {
       const tab = findTab((t) => t.id === tabId) as RequestTab | undefined;
       if (!tab || tab.kind !== "request" || tab.running) return;
       const env = get().workspaces.find((w) => w.id === tab.workspaceId)?.prefs.activeEnvironment ?? null;
+      if (!(await confirmProtected(env, `Send ${tab.draft.name}`))) return;
       get().updateTab<RequestTab>(tabId, (t) => ({ ...t, running: true, viewingSaved: null }));
       try {
         const result = await api.sendRequest(tab.workspaceId, tab.draft, null, env);
@@ -654,6 +654,7 @@ export const useStore = create<Store>()((set, get) => {
       const node = chain?.[chain.length - 1];
       if (!id || !node) return;
       const environmentId = get().activeEntry()?.prefs.activeEnvironment ?? null;
+      if (!(await confirmProtected(environmentId, `Run ${node.meta.name}`))) return;
       const tab: RunnerTab = {
         kind: "runner",
         id: uid(),
@@ -843,7 +844,7 @@ export const useStore = create<Store>()((set, get) => {
       ),
 
     showWorkspaceDialog: (mode) => set({ dialog: { kind: "workspace", mode } }),
-    showImportDialog: () => set({ dialog: { kind: "import" } }),
+    showImportDialog: (tab) => set({ dialog: { kind: "import", tab } }),
 
     closeDialog: () => set({ dialog: null }),
   };

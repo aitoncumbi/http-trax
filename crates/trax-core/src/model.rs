@@ -303,14 +303,23 @@ impl GroupMeta {
     }
 }
 
-/// `environments/*.env.yaml`.
+/// `environments/*.env.yaml` (shared through git) or
+/// `.trax/environments/*.env.yaml` (this machine only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
     pub id: String,
     pub name: String,
+    /// Sending a request with this environment needs confirmation in the
+    /// app, and agents may not run requests with it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub protected: bool,
     #[serde(default)]
     pub variables: Vec<Variable>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Environment {
@@ -318,12 +327,13 @@ impl Environment {
         Self {
             id: new_id(),
             name: name.into(),
+            protected: false,
             variables: Vec::new(),
         }
     }
 }
 
-/// An environment as presented to the UI: the shared definition plus this
+/// An environment as presented to the UI: the definition plus this
 /// machine's local overrides (values set by scripts, "current values").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,6 +341,13 @@ pub struct EnvironmentView {
     #[serde(flatten)]
     pub environment: Environment,
     pub overrides: BTreeMap<String, String>,
+    /// Stored in `environments/` and committed, rather than kept in `.trax/`.
+    #[serde(default = "default_shared")]
+    pub shared: bool,
+}
+
+fn default_shared() -> bool {
+    true
 }
 
 // ------------------------------------------------------------------ tree

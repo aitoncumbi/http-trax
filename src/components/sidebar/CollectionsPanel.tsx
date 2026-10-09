@@ -9,20 +9,19 @@ import {
   Pencil,
   Play,
   Plus,
-  Search,
   Settings2,
   Star,
   Trash2,
-  X,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { useStore, useWorkspaceTabs } from "@/lib/store";
 import type { GroupNode, RequestSummary, TreeItem } from "@/lib/types";
-import { countRequests, cx, filterTree } from "@/lib/util";
+import { countRequests, cx } from "@/lib/util";
 
 import { MethodPill } from "../ui/Brand";
 import { MenuButton, useContextMenu, type MenuItem } from "../ui/Menu";
+import { SidebarIconButton, SidebarSection } from "./Sidebar";
 
 const EXPANDED_KEY = "http-trax.expanded.";
 const INDENT = 14;
@@ -77,7 +76,7 @@ function Guides({ depth }: { depth: number }) {
   return (
     <>
       {Array.from({ length: depth }, (_, i) => (
-        <span key={i} aria-hidden className="absolute top-0 bottom-0 w-px bg-border" style={{ left: 16 + i * INDENT }} />
+        <span key={i} aria-hidden className="absolute top-0 bottom-0 w-px bg-border-mid" style={{ left: 16 + i * INDENT }} />
       ))}
     </>
   );
@@ -90,7 +89,7 @@ export function CollectionsPanel() {
   const entry = useStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId) ?? null);
   const createCollection = useStore((s) => s.createCollection);
   const setScope = useStore((s) => s.setScope);
-  const [query, setQuery] = useState("");
+  const showImportDialog = useStore((s) => s.showImportDialog);
   const { expanded, toggle } = useExpanded(workspaceId);
 
   const scoped = entry?.prefs.scopedCollection ?? null;
@@ -100,48 +99,32 @@ export function CollectionsPanel() {
   const { pinned, others } = useMemo(() => {
     const bookmarks = entry?.prefs.bookmarks ?? [];
     const visible = scopedCollection ? [scopedCollection] : collections;
-    const filtered = query
-      ? visible
-          .map((c) => {
-            const items = filterTree(c.items, query);
-            const nameHit = c.meta.name.toLowerCase().includes(query.trim().toLowerCase());
-            return nameHit || items.length ? { ...c, items: nameHit ? c.items : items } : null;
-          })
-          .filter((c): c is GroupNode => c !== null)
-      : visible;
     // Bookmarked collections stay on top, in the order they were pinned.
-    const pinned = bookmarks.map((id) => filtered.find((c) => c.meta.id === id)).filter((c): c is GroupNode => !!c);
-    const others = filtered.filter((c) => !bookmarks.includes(c.meta.id));
+    const pinned = bookmarks.map((id) => visible.find((c) => c.meta.id === id)).filter((c): c is GroupNode => !!c);
+    const others = visible.filter((c) => !bookmarks.includes(c.meta.id));
     return { pinned, others };
-  }, [collections, scopedCollection, entry, query]);
-
-  const forceOpen = query.trim().length > 0;
+  }, [collections, scopedCollection, entry]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2.5 pt-2.5 pr-2 pb-1.5 pl-2.5">
-        <label className="flex h-[30px] flex-1 items-center gap-2 rounded-[7px] border border-border-strong px-2.5 text-faint focus-within:border-accent-line">
-          <Search size={14} strokeWidth={1.5} />
-          <span className="sr-only">Search requests</span>
-          <input
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none placeholder:text-faint"
-            placeholder="Search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {query && (
-            <button type="button" aria-label="Clear search" onClick={() => setQuery("")} className="text-faint hover:text-text">
-              <X size={13} />
-            </button>
-          )}
-        </label>
-        <button type="button" className="icon-btn" aria-label="New collection" title="New collection" onClick={() => void createCollection()}>
-          <Plus size={16} strokeWidth={1.6} />
-        </button>
-      </div>
+      <SidebarSection
+        title={scopedCollection ? "Collection" : "Collections"}
+        actions={
+          <>
+            <SidebarIconButton label="Import (cURL or Postman)" onClick={() => showImportDialog()}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M8 3v7.5M5 7.5l3 3 3-3M3.5 13h9" />
+              </svg>
+            </SidebarIconButton>
+            <SidebarIconButton label="New collection" onClick={() => void createCollection()}>
+              <Plus size={14} strokeWidth={1.6} />
+            </SidebarIconButton>
+          </>
+        }
+      />
 
       {scopedCollection && (
-        <div className="mx-2.5 mt-1 mb-1.5 flex items-center gap-2 rounded-lg bg-accent-soft py-1.5 pr-1.5 pl-2.5 text-[12.5px] text-accent-text-2">
+        <div className="mx-1.5 mt-1 mb-1.5 flex items-center gap-2 rounded-lg bg-accent-soft py-1.5 pr-1.5 pl-2.5 text-[12.5px] text-accent-text-2">
           <Crosshair size={13} className="shrink-0" />
           <span className="flex-1 truncate">
             Only <strong className="font-semibold">{scopedCollection.meta.name}</strong>
@@ -154,7 +137,7 @@ export function CollectionsPanel() {
 
       {tree && tree.problems.length > 0 && (
         <div
-          className="mx-2.5 mt-1 mb-1.5 flex items-start gap-2 rounded-lg bg-warn/12 px-2.5 py-1.5 text-[12.5px] text-warn"
+          className="mx-1.5 mt-1 mb-1.5 flex items-start gap-2 rounded-lg bg-warn/12 px-2.5 py-1.5 text-[12.5px] text-warn"
           title={tree.problems.map((p) => `${p.path}: ${p.message}`).join("\n")}
         >
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -164,13 +147,13 @@ export function CollectionsPanel() {
         </div>
       )}
 
-      <nav aria-label="Collection tree" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-1.5 pt-0.5 pb-2.5" role="tree">
+      <nav aria-label="Collection tree" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pt-0.5 pb-2.5" role="tree">
         {treeError && <p className="px-2 py-3 text-[13px] text-danger">{treeError}</p>}
         {!tree && !treeError && <p className="px-2 py-3 text-[13px] text-faint">Loading…</p>}
         {tree && collections.length === 0 && (
           <div className="mx-1 mt-3 rounded-[10px] border border-dashed border-border-strong px-4 py-5 text-center">
             <p className="text-[13.5px] text-text-2">No collections yet</p>
-            <p className="mt-1 text-[12.5px] text-faint">Group the requests for one API, or let an AI agent create them over MCP.</p>
+            <p className="mt-1 text-[12.5px] text-faint">Group the requests for one API, import from Postman, or let an AI agent create them over MCP.</p>
             <button type="button" className="btn-primary mt-4" onClick={() => void createCollection()}>
               <Plus size={14} /> New collection
             </button>
@@ -180,17 +163,14 @@ export function CollectionsPanel() {
           <>
             <SectionLabel icon={<Star size={10} className="fill-current" />} label="Pinned" />
             {pinned.map((c) => (
-              <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked expanded={expanded} toggle={toggle} forceOpen={forceOpen} />
+              <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked expanded={expanded} toggle={toggle} forceOpen={false} />
             ))}
+            {others.length > 0 && <div className="mx-2 my-1.5 h-px bg-border" />}
           </>
         )}
-        {others.length > 0 && pinned.length > 0 && <SectionLabel label="Collections" />}
         {others.map((c) => (
-          <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked={false} expanded={expanded} toggle={toggle} forceOpen={forceOpen} />
+          <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked={false} expanded={expanded} toggle={toggle} forceOpen={false} />
         ))}
-        {tree && collections.length > 0 && pinned.length + others.length === 0 && (
-          <p className="px-2 py-3 text-[13px] text-faint">No requests match “{query}”.</p>
-        )}
       </nav>
     </div>
   );
@@ -198,7 +178,7 @@ export function CollectionsPanel() {
 
 function SectionLabel({ label, icon }: { label: string; icon?: React.ReactNode }) {
   return (
-    <div className="mt-2 mb-0.5 flex items-center gap-1.5 px-2 text-[11px] font-semibold tracking-[0.06em] text-faint uppercase first:mt-1">
+    <div className="mt-1 mb-0.5 flex items-center gap-1.5 px-2.5 text-[12px] font-medium text-faint">
       {icon}
       {label}
     </div>

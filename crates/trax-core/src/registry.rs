@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::AgentPermissions;
 use crate::error::{Error, IoContext, Result};
 use crate::fsutil::{read_json, write_json};
 use crate::workspace::Workspace;
@@ -91,6 +92,9 @@ pub struct RegistryData {
     pub workspaces: Vec<WorkspaceEntry>,
     #[serde(default)]
     pub active_workspace: Option<String>,
+    /// What AI agents connected through MCP may do (all workspaces).
+    #[serde(default)]
+    pub agent_permissions: AgentPermissions,
 }
 
 #[derive(Debug, Clone)]
