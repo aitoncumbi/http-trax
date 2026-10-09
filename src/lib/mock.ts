@@ -7,6 +7,8 @@ import type {
   AgentPermissions,
   Branch,
   Commit,
+  CookieInfo,
+  CookieKey,
   Environment,
   EnvironmentView,
   ExportRequest,
@@ -43,6 +45,16 @@ const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// ---------------------------------------------------------------- cookie jar
+
+const jars = new Map<string, CookieInfo[]>();
+const jar = (workspaceId: string) => {
+  let j = jars.get(workspaceId);
+  if (!j) jars.set(workspaceId, (j = []));
+  return j;
+};
+const sameCookie = (c: CookieKey, k: CookieKey) => c.domain === k.domain && c.path === k.path && c.name === k.name;
 
 const kv = (key: string, value: string) => ({ key, value, enabled: true });
 
@@ -163,6 +175,13 @@ function seed(): MockWorkspace[] {
   const payments = mk("Payments", "Payments Team", "/home/dev/payments-service/api-tests", [orders, customers, auth, webhooks], [local, staging, production]);
   payments.entry.prefs.bookmarks = [orders.meta.id];
   payments.runtime = { traceId: "t-91c2" };
+  const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString().replace(/\.\d+Z$/, "Z");
+  jars.set(payments.entry.id, [
+    { name: "sid", value: "s_7f3a9c21e04b", domain: "localhost", includeSubdomains: false, path: "/", secure: false, httpOnly: true, sameSite: "Lax" },
+    { name: "csrftoken", value: "Xq9vK2mP8rT4", domain: "localhost", includeSubdomains: false, path: "/", expires: inDays(30), secure: false, httpOnly: false, sameSite: "Strict" },
+    { name: "__cf_bm", value: "pV3.kQ8-1728480000-1.0.1.1", domain: "acme.dev", includeSubdomains: true, path: "/", expires: inDays(0.02), secure: true, httpOnly: true, sameSite: "None" },
+    { name: "staging_session", value: "eyJ1aWQiOiJjdXNfOWZBM2tMMiJ9", domain: "api.staging.acme.dev", includeSubdomains: false, path: "/v1", expires: inDays(7), secure: true, httpOnly: true },
+  ]);
   const day = 86_400_000;
   const h = (name: string, method: string, status: number, ago: number): HistoryEntry => ({
     id: uid(),
@@ -273,6 +292,23 @@ function findRequest(w: MockWorkspace, id: string): { request: Request; parent: 
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
+function cookieHeaderFor(workspaceId: string, url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url.includes("://") ? url : `http://${url}`);
+  } catch {
+    return null;
+  }
+  const found = jar(workspaceId).filter((c) => {
+    const host = u.hostname;
+    const domainOk = host === c.domain || (c.includeSubdomains && host.endsWith(`.${c.domain}`));
+    const pathOk = c.path === "/" || u.pathname === c.path || u.pathname.startsWith(c.path.replace(/\/?$/, "/"));
+    return domainOk && pathOk && (!c.secure || u.protocol === "https:") && (!c.expires || Date.parse(c.expires) > Date.now());
+  });
+  return found.length ? found.map((c) => `${c.name}=${c.value}`).join("; ") : null;
+}
+
+
 function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: string | null): RunResult {
   const env = w.environments.find((e) => e.id === envId);
   const vars: Record<string, string> = {};
@@ -289,6 +325,26 @@ function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: 
     .map((h) => ({ key: h.key, value: sub(h.value) }));
   const body = request.body && "text" in request.body ? sub(request.body.text) : undefined;
   const status = request.method === "POST" ? 201 : request.method === "DELETE" ? 204 : 200;
+  const useJar = request.settings?.cookies !== false && !headers.some((h) => h.key.toLowerCase() === "cookie");
+  const cookie = useJar ? cookieHeaderFor(w.entry.id, url) : null;
+  if (cookie) headers.push({ key: "Cookie", value: cookie });
+  const setCookies: string[] = [];
+  if (useJar && request.method === "POST" && /\/(login|sessions?|signin)\b/.test(url)) {
+    const host = (() => {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return "localhost";
+      }
+    })();
+    const value = `s_${uid().slice(0, 12)}`;
+    setCookies.push(`sid=${value}; Path=/; HttpOnly; SameSite=Lax`);
+    const j = jar(w.entry.id);
+    const c: CookieInfo = { name: "sid", value, domain: host, includeSubdomains: false, path: "/", secure: false, httpOnly: true, sameSite: "Lax" };
+    const at = j.findIndex((x) => sameCookie(x, c));
+    if (at >= 0) j[at] = c;
+    else j.push(c);
+  }
   const scripts = [...chain.map((g) => g.meta.scripts?.postResponse ?? ""), request.scripts?.postResponse ?? ""];
   const tests = scripts.flatMap((s, i) =>
     [...s.matchAll(/(?:trax|pm)\.test\(\s*["'`](.+?)["'`]/g)].map((m) => ({
@@ -328,6 +384,7 @@ function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: 
         { key: "content-type", value: html ? "text/html; charset=utf-8" : "application/json" },
         { key: "x-request-id", value: uid() },
         { key: "date", value: new Date().toUTCString() },
+        ...setCookies.map((value) => ({ key: "set-cookie", value })),
       ],
       body: responseBody,
       size: responseBody.length,
@@ -643,6 +700,37 @@ const handlers: Record<string, (a: Args) => unknown> = {
     return structuredClone(env);
   },
   import_json: (a) => importPostman(ws(a.workspaceId), s(a, "json")),
+  list_cookies: (a) =>
+    [...jar(s(a, "workspaceId"))]
+      .filter((c) => !c.expires || Date.parse(c.expires) > Date.now())
+      .sort((x, y) => x.domain.localeCompare(y.domain) || x.path.localeCompare(y.path) || x.name.localeCompare(y.name)),
+  save_cookie: (a) => {
+    const j = jar(s(a, "workspaceId"));
+    const c = { ...(a.cookie as CookieInfo) };
+    c.domain = c.domain.trim().replace(/^\./, "").toLowerCase();
+    c.path = c.path.startsWith("/") ? c.path : `/${c.path}`;
+    if (!c.name || /[\s=;,]/.test(c.name)) throw new Error(`invalid cookie name "${c.name}"`);
+    if (c.value.includes(";")) throw new Error(`the value of ${c.name} can't contain ";"`);
+    if (!c.domain) throw new Error("invalid cookie domain");
+    if (c.expires && Date.parse(c.expires) <= Date.now()) throw new Error("the cookie has already expired");
+    const prev = a.previous as CookieKey | null;
+    const keep = j.filter((x) => !(prev && sameCookie(x, prev)) && !sameCookie(x, c));
+    jars.set(s(a, "workspaceId"), [...keep, c]);
+    return c;
+  },
+  delete_cookie: (a) => {
+    const j = jar(s(a, "workspaceId"));
+    const keep = j.filter((x) => !sameCookie(x, a.key as CookieKey));
+    jars.set(s(a, "workspaceId"), keep);
+    return keep.length !== j.length;
+  },
+  clear_cookies: (a) => {
+    const j = jar(s(a, "workspaceId"));
+    const d = (a.domain as string | null)?.replace(/^\./, "").toLowerCase();
+    const keep = d ? j.filter((c) => c.domain !== d && !c.domain.endsWith(`.${d}`)) : [];
+    jars.set(s(a, "workspaceId"), keep);
+    return j.length - keep.length;
+  },
   export_request: (a): ExportRequest => {
     const w = ws(a.workspaceId);
     const request = a.request as Request;

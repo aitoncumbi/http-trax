@@ -51,6 +51,30 @@ export interface RequestSettings {
   timeoutMs?: number;
   followRedirects: boolean;
   verifyTls: boolean;
+  /** Use the workspace cookie jar (default true). */
+  cookies?: boolean;
+}
+
+/** A cookie in the workspace jar (`.trax/cookies.json`, never committed). */
+export interface CookieInfo {
+  name: string;
+  value: string;
+  /** Host, without a leading dot. */
+  domain: string;
+  /** Also sent to subdomains. */
+  includeSubdomains: boolean;
+  path: string;
+  /** RFC 3339; absent for a session cookie. */
+  expires?: string | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite?: string | null;
+}
+
+export interface CookieKey {
+  domain: string;
+  path: string;
+  name: string;
 }
 
 export interface Request {

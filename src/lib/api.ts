@@ -11,6 +11,8 @@ import type {
   Branch,
   CollectionRun,
   Commit,
+  CookieInfo,
+  CookieKey,
   Environment,
   EnvironmentView,
   ExportRequest,
@@ -121,6 +123,13 @@ export const api = {
     call<ExportRequest>("export_request", { workspaceId, request, parentId, environmentId, resolve }),
   writeFile: (path: string, contents: { text?: string; base64?: string }) =>
     call<void>("write_file", { path, text: contents.text ?? null, base64: contents.base64 ?? null }),
+
+  // cookie jar
+  listCookies: (workspaceId: string) => call<CookieInfo[]>("list_cookies", { workspaceId }),
+  saveCookie: (workspaceId: string, cookie: CookieInfo, previous: CookieKey | null) =>
+    call<CookieInfo>("save_cookie", { workspaceId, cookie, previous }),
+  deleteCookie: (workspaceId: string, key: CookieKey) => call<boolean>("delete_cookie", { workspaceId, key }),
+  clearCookies: (workspaceId: string, domain: string | null) => call<number>("clear_cookies", { workspaceId, domain }),
 
   // environments: git and protection
   setEnvironmentShared: (workspaceId: string, id: string, shared: boolean) =>

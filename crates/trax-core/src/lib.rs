@@ -6,6 +6,7 @@
 //! in the app and vice versa.
 
 pub mod agents;
+pub mod cookies;
 pub mod diff;
 pub mod error;
 pub mod export;
@@ -20,6 +21,7 @@ pub mod runner;
 pub mod workspace;
 
 pub use agents::{ActivityKind, AgentActivity, AgentPermissions, AgentSession};
+pub use cookies::{CookieInfo, CookieJar, CookieKey};
 pub use diff::{semantic_diff, ChangeKind, SemanticChange};
 pub use error::{Error, Result};
 pub use export::{prepare_export, ExportRequest};

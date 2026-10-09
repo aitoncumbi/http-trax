@@ -1,11 +1,13 @@
 "use client";
 
-import { AlertTriangle, ChevronDown, ChevronRight, Code2, Copy, Loader2, Save, Send } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Code2, Cookie, Copy, Loader2, Save, Send } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { tabDirty, useStore, type PaneLayout, type RequestTab } from "@/lib/store";
 import type { Auth, Body, GroupNode, KeyValue, Request } from "@/lib/types";
+import { hostOf } from "@/lib/cookies";
 import { cx, findChain, METHODS, methodColor } from "@/lib/util";
+import { resolveText } from "@/lib/variables";
 
 import { AuthEditor } from "../editors/AuthEditor";
 import { BodyEditor } from "../editors/BodyEditor";
@@ -214,6 +216,11 @@ export function RequestView({ tab }: { tab: RequestTab }) {
           items={[
             { label: "Code snippet…", icon: <Code2 size={14} />, onSelect: () => void useStore.getState().showCodeDialog({ tabId: tab.id }) },
             { label: "Copy as cURL", icon: <Copy size={14} />, onSelect: () => void useStore.getState().copyAsCurl({ tabId: tab.id }) },
+            {
+              label: "Cookies…",
+              icon: <Cookie size={14} />,
+              onSelect: () => useStore.getState().showCookies(hostOf(resolveText(r.url, scope)) ?? undefined),
+            },
           ]}
         >
           <Code2 size={15} strokeWidth={1.5} />
@@ -279,6 +286,12 @@ export function RequestView({ tab }: { tab: RequestTab }) {
                     desc: "Turn off only for local development with self-signed certificates.",
                     on: r.settings?.verifyTls ?? true,
                     toggle: (v: boolean) => set({ settings: { followRedirects: true, ...r.settings, verifyTls: v } }),
+                  },
+                  {
+                    label: "Use the cookie jar",
+                    desc: "Send cookies saved for this site and keep the ones the response sets.",
+                    on: r.settings?.cookies ?? true,
+                    toggle: (v: boolean) => set({ settings: { followRedirects: true, verifyTls: true, ...r.settings, cookies: v ? undefined : false } }),
                   },
                 ].map((row) => (
                   <div key={row.label} className="flex min-h-[62px] items-center gap-3.5 border-b border-border-soft">

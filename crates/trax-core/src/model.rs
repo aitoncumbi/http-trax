@@ -203,6 +203,10 @@ pub struct RequestSettings {
     pub follow_redirects: bool,
     #[serde(default = "default_true")]
     pub verify_tls: bool,
+    /// Send cookies from the workspace cookie jar and store the ones the
+    /// response sets.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub cookies: bool,
 }
 
 impl Default for RequestSettings {
@@ -211,6 +215,7 @@ impl Default for RequestSettings {
             timeout_ms: None,
             follow_redirects: true,
             verify_tls: true,
+            cookies: true,
         }
     }
 }
@@ -316,6 +321,10 @@ pub struct Environment {
     pub protected: bool,
     #[serde(default)]
     pub variables: Vec<Variable>,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 fn is_false(v: &bool) -> bool {

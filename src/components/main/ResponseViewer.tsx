@@ -2,12 +2,12 @@
 
 import { openSearchPanel } from "@codemirror/search";
 import type { ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { Bookmark, Check, Copy, Download, ListFilter, Loader2, Minus, Search, Trash2, WrapText, X } from "lucide-react";
+import { Bookmark, Check, Cookie, Copy, Download, ListFilter, Loader2, Minus, Search, Trash2, WrapText, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { errorMessage, saveToFile } from "@/lib/api";
+import { expiryLabel, hostOf, parseCookieHeader, parseSetCookie } from "@/lib/cookies";
 import { jsonPath, JsonPathError } from "@/lib/jsonpath";
-
 import { useStore, type RequestTab } from "@/lib/store";
 import type { ResponseData, SentRequest } from "@/lib/types";
 import { cx, formatDuration, formatSize, methodColor, prettyJson, statusColor, timeAgo } from "@/lib/util";
@@ -15,7 +15,7 @@ import { cx, formatDuration, formatSize, methodColor, prettyJson, statusColor, t
 import { CodeEditor, type CodeLanguage } from "../editors/CodeEditor";
 import { Pills, TabStrip } from "../ui/Segmented";
 
-type Section = "body" | "headers" | "tests" | "console" | "request" | "saved";
+type Section = "body" | "headers" | "cookies" | "tests" | "console" | "request" | "saved";
 
 function contentType(r: ResponseData): string {
   return r.headers.find((h) => h.key.toLowerCase() === "content-type")?.value ?? "";
@@ -337,6 +337,75 @@ function BodyView({ response }: { response: ResponseData }) {
   );
 }
 
+function CookiesView({ response, sent }: { response: ResponseData | null | undefined; sent: SentRequest | null | undefined }) {
+  const showCookies = useStore((s) => s.showCookies);
+  const url = response?.url || sent?.url || "";
+  const set = (response?.headers ?? [])
+    .filter((h) => h.key.toLowerCase() === "set-cookie")
+    .map((h) => parseSetCookie(h.value, url))
+    .filter((c) => c !== null);
+  const sentHeader = sent?.headers.find((h) => h.key.toLowerCase() === "cookie");
+  const sentCookies = sentHeader ? parseCookieHeader(sentHeader.value) : [];
+  const host = hostOf(url) ?? undefined;
+  const manage = (
+    <button type="button" className="btn h-7" onClick={() => showCookies(host)}>
+      <Cookie size={13} strokeWidth={1.6} /> Manage cookies
+    </button>
+  );
+  if (set.length === 0 && sentCookies.length === 0) {
+    return (
+      <Empty title="No cookies" text="This response didn't set any cookies, and none were sent with the request.">
+        <div className="mt-3">{manage}</div>
+      </Empty>
+    );
+  }
+  return (
+    <div className="px-5 py-4">
+      {set.length > 0 && (
+        <section className="mb-6">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="eyebrow">Set by this response</span>
+          </div>
+          <div className="overflow-hidden rounded-[10px] border border-border-mid">
+            {set.map((c, i) => (
+              <div key={i} className={cx("flex items-start gap-3 px-3.5 py-2.5", i > 0 && "border-t border-border-soft")}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-mono text-[13px] text-key">{c.name}</span>
+                    <span className="font-mono text-[12px] text-faint">
+                      {c.includeSubdomains ? "." : ""}
+                      {c.domain}
+                      {c.path}
+                    </span>
+                    {c.httpOnly && <span className="rounded-[5px] bg-selected px-1.5 py-px text-[11px] text-muted">HttpOnly</span>}
+                    {c.secure && <span className="rounded-[5px] bg-selected px-1.5 py-px text-[11px] text-muted">Secure</span>}
+                    {c.sameSite && <span className="rounded-[5px] bg-selected px-1.5 py-px text-[11px] text-muted">SameSite={c.sameSite}</span>}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[12.5px] text-muted" title={c.value}>
+                    {c.value || <span className="text-faint">empty</span>}
+                  </div>
+                </div>
+                <span className={cx("shrink-0 pt-0.5 text-[12px]", expiryLabel(c.expires) === "Expired" ? "text-warn" : "text-faint")}>
+                  {expiryLabel(c.expires) === "Expired" ? "Removes it" : expiryLabel(c.expires)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {sentCookies.length > 0 && (
+        <section className="mb-6">
+          <div className="eyebrow mb-2">Sent with the request</div>
+          <div className="-mx-2.5">
+            <HeaderRows headers={sentCookies.map((c) => ({ key: c.name, value: c.value }))} />
+          </div>
+        </section>
+      )}
+      {manage}
+    </div>
+  );
+}
+
 function Empty({ title, text, children }: { title: string; text?: React.ReactNode; children?: React.ReactNode }) {
   return (
     <div className="flex min-h-[160px] flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
@@ -423,6 +492,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
       tabs={[
         { id: "body", label: "Body" },
         { id: "headers", label: "Headers", badge: response?.headers.length },
+        { id: "cookies", label: "Cookies", badge: response?.headers.filter((h) => h.key.toLowerCase() === "set-cookie").length || undefined },
         ...(!saved
           ? [
               { id: "tests" as const, label: "Tests", badge: tests.length ? `${passed}/${tests.length}` : undefined, tone: failed ? ("danger" as const) : ("ok" as const) },
@@ -556,6 +626,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
               ))}
             </div>
           ))}
+        {section === "cookies" && <CookiesView response={response} sent={sent} />}
         {section === "request" && (sent ? <RequestSummary req={sent} /> : <Empty title="Nothing sent yet" />)}
         {section === "saved" && savedList}
       </div>

@@ -91,7 +91,8 @@ export type Dialog =
   | { kind: "confirm"; title: string; message: string; confirm?: string; danger?: boolean; resolve: (v: boolean) => void }
   | { kind: "workspace"; mode: "create" | "open" | "clone" }
   | { kind: "import"; tab?: "curl" | "postman" }
-  | { kind: "code"; request: Request; parentId: string | null };
+  | { kind: "code"; request: Request; parentId: string | null }
+  | { kind: "cookies"; domain?: string };
 
 export function tabDirty(tab: Tab): boolean {
   switch (tab.kind) {
@@ -190,6 +191,8 @@ interface Actions {
   /** Code snippets for an open tab's draft, or a saved request. */
   showCodeDialog: (target: { tabId?: string; requestId?: string }) => Promise<void>;
   copyAsCurl: (target: { tabId?: string; requestId?: string }) => Promise<void>;
+  /** Open the cookie manager, optionally on one domain. */
+  showCookies: (domain?: string) => void;
   closeDialog: () => void;
 }
 
@@ -889,6 +892,8 @@ export const useStore = create<Store>()((set, get) => {
         fail(e);
       }
     },
+
+    showCookies: (domain) => set({ dialog: { kind: "cookies", domain } }),
 
     closeDialog: () => set({ dialog: null }),
   };

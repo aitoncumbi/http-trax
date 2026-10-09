@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cookies::CookieJar;
 use crate::error::{Error, Result};
 use crate::interpolate::{interpolate, unresolved};
 use crate::model::*;
@@ -143,6 +144,12 @@ pub fn prepare_export(
     if multipart {
         // Every tool sets multipart/form-data with its own boundary.
         headers.retain(|h| !h.key.eq_ignore_ascii_case("content-type"));
+    }
+
+    if resolve && request.settings.cookies && !has_header(&headers, "cookie") {
+        if let Some(cookie) = CookieJar::of(ws).header_for(&url) {
+            headers.push(Header::new("Cookie", cookie));
+        }
     }
 
     let mut basic_auth = None;
@@ -293,6 +300,23 @@ mod tests {
         };
         let r = ws.create_request(&c.meta.id, r).unwrap();
 
+        crate::cookies::CookieJar::of(&ws)
+            .upsert(
+                &crate::cookies::CookieInfo {
+                    name: "sid".into(),
+                    value: "c00k1e".into(),
+                    domain: "localhost".into(),
+                    include_subdomains: false,
+                    path: "/".into(),
+                    expires: None,
+                    secure: false,
+                    http_only: true,
+                    same_site: None,
+                },
+                None,
+            )
+            .unwrap();
+
         let resolved = prepare_export(&ws, &r, None, Some(&env.id), true).unwrap();
         assert_eq!(resolved.method, "POST");
         assert_eq!(resolved.url, "http://localhost:8080/orders?dry=1");
@@ -300,12 +324,14 @@ mod tests {
         assert_eq!(h["authorization"], "Bearer s3cr3t");
         assert_eq!(h["accept"], "application/json");
         assert_eq!(h["content-type"], "application/json");
+        assert_eq!(h["cookie"], "sid=c00k1e");
         assert_eq!(resolved.warnings.len(), 2, "{:?}", resolved.warnings);
         assert!(resolved.warnings[1].contains("{{orderId}}"));
 
         let raw = prepare_export(&ws, &r, None, Some(&env.id), false).unwrap();
         assert_eq!(raw.url, "{{baseUrl}}/orders?dry=1");
         assert_eq!(header_map(&raw)["authorization"], "Bearer {{token}}");
+        assert!(!header_map(&raw).contains_key("cookie"));
         assert_eq!(
             raw.body,
             ExportBody::Text {

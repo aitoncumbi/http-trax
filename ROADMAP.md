@@ -76,12 +76,13 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 ## Phase 1 — Daily-driver polish
 
 - [ ] Import: Insomnia, Bruno, OpenAPI 3.x, HAR (cURL and Postman are done); Postman example responses and OAuth 2.0 settings
-- [ ] Export: cURL and code snippets (fetch, axios, Python requests, Go, Rust)
+- [x] Export: copy as cURL and code snippets (cURL, fetch, axios, Python requests, Go, Rust), with or without variables filled in
 - [ ] Search history and "restore as request"
-- [ ] Cookie jar per workspace, with an editor
+- [x] Cookie jar per workspace (redirect-aware, kept in `.trax/cookies.json`), cookie manager, response Cookies tab, per-request opt-out, MCP `list_cookies` / `clear_cookies`
 - [ ] Drag and drop to reorder and move requests and folders
-- [ ] Variable autocomplete and hover-to-preview resolved values in the URL bar and editors
-- [ ] Response tools: search, JSONPath/JMESPath filter, word wrap toggle, save body to file, large-response virtualization
+- [x] Variable autocomplete and hover-to-preview resolved values in the URL bar, key-value tables and body editors
+- [x] Response tools: search, JSONPath filter, word wrap toggle, save body to file; very large bodies open as plain text
+- [ ] JMESPath filter, and virtualized rendering for very large responses
 - [ ] Configurable keyboard shortcuts
 - [ ] Finish the Courion rename: installers, binaries, MCP server name, and a `courion.*` alias for the script API
 - [ ] Proxy settings, custom CA certificates, client certificates (mTLS)

@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use reqwest::{redirect, Client, Method};
 
+use crate::cookies::CookieJar;
 use crate::model::{Header, RequestSettings, ResponseData};
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -55,15 +56,28 @@ pub struct HttpRequest {
     pub headers: Vec<Header>,
     pub body: PreparedBody,
     pub settings: RequestSettings,
+    /// Send cookies from, and store response cookies in, this jar.
+    pub cookies: Option<Arc<CookieJar>>,
 }
 
-/// Clients are cached per (follow redirects, verify TLS) so connection pools
-/// are reused across requests.
-fn client(follow_redirects: bool, verify_tls: bool) -> Result<Client, String> {
-    static CLIENTS: OnceLock<Mutex<HashMap<(bool, bool), Client>>> = OnceLock::new();
+type ClientKey = (bool, bool, Option<PathBuf>);
+
+/// Clients are cached per (follow redirects, verify TLS, cookie jar) so
+/// connection pools are reused across requests.
+fn client(
+    follow_redirects: bool,
+    verify_tls: bool,
+    jar: Option<&Arc<CookieJar>>,
+) -> Result<Client, String> {
+    static CLIENTS: OnceLock<Mutex<HashMap<ClientKey, Client>>> = OnceLock::new();
     let cache = CLIENTS.get_or_init(Default::default);
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(c) = cache.get(&(follow_redirects, verify_tls)) {
+    let key = (
+        follow_redirects,
+        verify_tls,
+        jar.map(|j| j.path().to_path_buf()),
+    );
+    if let Some(c) = cache.get(&key) {
         return Ok(c.clone());
     }
     let policy = if follow_redirects {
@@ -71,14 +85,18 @@ fn client(follow_redirects: bool, verify_tls: bool) -> Result<Client, String> {
     } else {
         redirect::Policy::none()
     };
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .user_agent(USER_AGENT)
         .redirect(policy)
         .tls_danger_accept_invalid_certs(!verify_tls)
-        .connect_timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(15));
+    if let Some(jar) = jar {
+        builder = builder.cookie_provider(jar.clone());
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("could not build HTTP client: {e}"))?;
-    cache.insert((follow_redirects, verify_tls), client.clone());
+    cache.insert(key, client.clone());
     Ok(client)
 }
 
@@ -98,7 +116,11 @@ pub async fn send(req: &HttpRequest) -> Result<ResponseData, String> {
         .map_err(|_| format!("invalid HTTP method {:?}", req.method))?;
     let url = url::Url::parse(&normalise_url(&req.url))
         .map_err(|e| format!("invalid URL {:?}: {e}", req.url))?;
-    let client = client(req.settings.follow_redirects, req.settings.verify_tls)?;
+    let client = client(
+        req.settings.follow_redirects,
+        req.settings.verify_tls,
+        req.cookies.as_ref(),
+    )?;
     let timeout =
         Duration::from_millis(req.settings.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).max(1));
 

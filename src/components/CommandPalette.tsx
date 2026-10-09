@@ -3,6 +3,7 @@
 import {
   Bot,
   Code2,
+  Cookie,
   Download,
   FolderTree,
   GitBranch,
@@ -175,6 +176,7 @@ export function CommandPalette() {
       { id: "theme", label: s.theme === "dark" ? "Use light theme" : "Use dark theme", icon: <Moon size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.toggleTheme() },
       { id: "mcp", label: "Connect an AI agent (MCP)", icon: <Bot size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("mcp") },
       { id: "envs", label: "Edit environments", icon: <SlidersHorizontal size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("environments") },
+      { id: "cookies", label: "Manage cookies", icon: <Cookie size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.showCookies() },
       ...(tree?.collections ?? []).map((c) => ({
         id: `run:${c.meta.id}`,
         label: `Run ${c.meta.name}`,

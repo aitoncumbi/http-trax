@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use base64::Engine as _;
 
+use crate::cookies::CookieJar;
 use crate::error::{Error, Result};
 use crate::http::{self, HttpRequest, PreparedBody, PreparedPart};
 use crate::interpolate::{interpolate, unresolved};
@@ -571,15 +572,34 @@ async fn execute(
         return result;
     }
 
-    // 5. Send.
+    // 5. Send. An explicit Cookie header bypasses the jar.
+    let jar = (request.settings.cookies && !has_header(&sent.headers, "cookie"))
+        .then(|| CookieJar::of(ws));
     let http_req = HttpRequest {
         method: sent.method.clone(),
         url: sent.url.clone(),
         headers: sent.headers.clone(),
         body,
         settings: request.settings.clone(),
+        cookies: jar.clone(),
     };
-    let response = match http::send(&http_req).await {
+    if let Some(cookie) = jar.as_ref().and_then(|j| j.header_for(&sent.url)) {
+        // Shown in the sent request; the client adds it (and re-reads the
+        // jar on each redirect).
+        result.request.headers.push(Header::new("Cookie", cookie));
+    }
+    let sent_result = http::send(&http_req).await;
+    if let Some(jar) = &jar {
+        if let Err(e) = jar.save() {
+            result.logs.push(LogEntry {
+                level: "warn".into(),
+                message: format!("could not save cookies: {e}"),
+                phase: "response".into(),
+                source: "runner".into(),
+            });
+        }
+    }
+    let response = match sent_result {
         Ok(r) => r,
         Err(e) => {
             result.error = Some(e);
@@ -978,5 +998,64 @@ mod tests {
             .unwrap();
         assert!(result.error.is_some());
         assert!(result.response.is_none());
+    }
+    #[tokio::test]
+    async fn cookie_jar_follows_redirects_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::init(dir.path(), "Cookies").unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "/me")
+                    .insert_header("set-cookie", "sid=abc123; Path=/; HttpOnly"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me"))
+            .and(header("cookie", "sid=abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ada"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let o = RunOptions {
+            persist: false,
+            ..Default::default()
+        };
+
+        let login = Request::new("Login", "POST", format!("{}/login", server.uri()));
+        let r = run_draft(&ws, &login, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(200), "{r:#?}");
+
+        let me = Request::new("Me", "GET", format!("{}/me", server.uri()));
+        let r = run_draft(&ws, &me, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(200));
+        assert!(r
+            .request
+            .headers
+            .iter()
+            .any(|h| h.key == "Cookie" && h.value == "sid=abc123"));
+        let saved = std::fs::read_to_string(CookieJar::of(&ws).path()).unwrap();
+        assert!(saved.contains("abc123"));
+
+        // Opted out, or an explicit header: the jar is not used.
+        let mut off = me.clone();
+        off.settings.cookies = false;
+        let r = run_draft(&ws, &off, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
+        let mut explicit = me.clone();
+        explicit.headers.push(KeyValue::new("Cookie", "sid=other"));
+        let r = run_draft(&ws, &explicit, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
+
+        CookieJar::of(&ws).clear(None).unwrap();
+        let r = run_draft(&ws, &me, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
     }
 }

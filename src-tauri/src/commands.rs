@@ -449,6 +449,51 @@ pub async fn write_file(
     tokio::fs::write(&path, bytes).await.str_err()
 }
 
+/// Cookies in a workspace's jar.
+#[tauri::command]
+pub async fn list_cookies(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Vec<CookieInfo>> {
+    let ws = state.workspace(&workspace_id)?;
+    Ok(CookieJar::of(&ws).list())
+}
+
+/// Add a cookie, or change the one identified by `previous`.
+#[tauri::command]
+pub async fn save_cookie(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    cookie: CookieInfo,
+    previous: Option<CookieKey>,
+) -> CmdResult<CookieInfo> {
+    let ws = state.workspace(&workspace_id)?;
+    CookieJar::of(&ws)
+        .upsert(&cookie, previous.as_ref())
+        .str_err()
+}
+
+#[tauri::command]
+pub async fn delete_cookie(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    key: CookieKey,
+) -> CmdResult<bool> {
+    let ws = state.workspace(&workspace_id)?;
+    CookieJar::of(&ws).delete(&key).str_err()
+}
+
+/// Remove all cookies, or a domain's. Returns how many were removed.
+#[tauri::command]
+pub async fn clear_cookies(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    domain: Option<String>,
+) -> CmdResult<usize> {
+    let ws = state.workspace(&workspace_id)?;
+    CookieJar::of(&ws).clear(domain.as_deref()).str_err()
+}
+
 /// Import a Postman collection or environment export.
 #[tauri::command]
 pub async fn import_json(

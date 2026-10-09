@@ -400,3 +400,46 @@ async fn permissions_protected_environments_and_activity() {
     h.server.end_session();
     assert!(!session_file.exists());
 }
+
+#[tokio::test]
+async fn cookie_jar_tools_mask_values() {
+    let api = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(204).insert_header("set-cookie", "sid=sess_9f8e7d; Path=/"),
+        )
+        .mount(&api)
+        .await;
+    let h = Harness::new();
+    let ws_dir = h.repo.path().join("jar");
+    h.tool(
+        "init_workspace",
+        json!({ "path": ws_dir.to_string_lossy() }),
+    )
+    .await;
+
+    let (text, _, err) = h
+        .tool(
+            "send_http_request",
+            json!({ "method": "POST", "url": format!("{}/login", api.uri()) }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert!(!text.contains("sess_9f8e7d"), "{text}");
+
+    let (text, result, _) = h.tool("list_cookies", json!({})).await;
+    assert!(text.contains("sid=••••••"), "{text}");
+    assert!(!result.to_string().contains("sess_9f8e7d"));
+    h.permissions(|p| p.read_secrets = true);
+    let (text, _, _) = h
+        .tool("list_cookies", json!({ "domain": "127.0.0.1" }))
+        .await;
+    assert!(text.contains("sid=sess_9f8e7d"), "{text}");
+
+    let (text, result, err) = h.tool("clear_cookies", json!({})).await;
+    assert!(!err, "{text}");
+    assert_eq!(result["removed"], 1);
+    let (text, _, _) = h.tool("list_cookies", json!({})).await;
+    assert!(text.contains("empty"), "{text}");
+}

@@ -11,6 +11,7 @@ import type { ExportRequest, GroupNode, Request, TreeItem } from "@/lib/types";
 import { cx, findChain } from "@/lib/util";
 
 import { CodeEditor } from "../editors/CodeEditor";
+import { CookiesDialog } from "./CookiesDialog";
 import { MethodPill } from "./Brand";
 import { Switch } from "./Controls";
 
@@ -601,5 +602,7 @@ export function Dialogs() {
       return <ImportDialog initialTab={dialog.tab} />;
     case "code":
       return <CodeDialog request={dialog.request} parentId={dialog.parentId} />;
+    case "cookies":
+      return <CookiesDialog domain={dialog.domain} />;
   }
 }
