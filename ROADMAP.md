@@ -8,7 +8,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [x] Rust workspace: `trax-core`, `trax-script`, `trax-git`, `trax-mcp`, Tauri 2 app
 - [x] Next.js (static export) + Tailwind UI, dark and light themes
 - [x] GitHub Actions CI on Linux and Windows: lint, typecheck, clippy, tests, installers (.deb, .rpm, AppImage, .msi, NSIS)
-- [x] Tag-triggered release workflow publishing installers and standalone `trax-mcp` binaries to a draft release
+- [x] Tag-triggered release workflow publishing installers and standalone `trax-mcp` binaries
 - [x] Browser preview mode with a mock backend for UI work
 
 **Workspaces and collections**

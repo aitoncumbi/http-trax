@@ -21,7 +21,7 @@ Built with Rust and Tauri 2 (backend and desktop shell) and Next.js (UI). Runs o
 
 ## Install
 
-Tagging a version (`v0.1.0`, ...) publishes installers to a draft GitHub release: `.deb`, `.rpm` and `.AppImage` for Linux, `.msi` and a setup `.exe` for Windows. Every CI run also uploads the installers as build artifacts.
+Download the latest installers from the [releases page](https://github.com/aitoncumbi/http-trax/releases): `.deb`, `.rpm` and `.AppImage` for Linux, `.msi` and a setup `.exe` for Windows, plus standalone `trax-mcp` binaries. Pushing a version tag (`v0.2.0`) builds and publishes a new release automatically; the installers appear on it about 20 minutes later, once the builds finish. Every CI run also uploads the installers as build artifacts.
 
 http-trax uses your installed `git` for all repository operations, so your existing credentials (SSH keys, Git Credential Manager, `gh auth`) just work.
 

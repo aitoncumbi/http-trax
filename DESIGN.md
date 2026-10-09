@@ -199,7 +199,7 @@ Decisions:
 
 - Rust unit and integration tests: the script sandbox, workspace storage, the runner against a local mock HTTP server (`wiremock`), git operations against real temporary repositories (two clones of a bare remote simulate teammates, including conflicts and auto-pull), and an end-to-end MCP session in which an "agent" builds and runs a suite.
 - Frontend: ESLint (Next.js core-web-vitals + TypeScript rules, React Compiler checks), `tsc --noEmit`, and a production build.
-- GitHub Actions: `ci.yml` runs frontend checks, Rust fmt/clippy/tests on Linux and Windows, then builds the desktop app and installers on both (Linux: .deb, .rpm, AppImage; Windows: .msi and NSIS setup) and uploads them with standalone `trax-mcp` binaries. `release.yml` builds the same on a `v*` tag and attaches everything to a draft GitHub release.
+- GitHub Actions: `ci.yml` runs frontend checks, Rust fmt/clippy/tests on Linux and Windows, then builds the desktop app and installers on both (Linux: .deb, .rpm, AppImage; Windows: .msi and NSIS setup) and uploads them with standalone `trax-mcp` binaries. `release.yml` builds the same on a `v*` tag and publishes everything on that tag's GitHub release (a pre-release when the tag has a suffix such as `-beta.1`).
 
 ## Known trade-offs
 
