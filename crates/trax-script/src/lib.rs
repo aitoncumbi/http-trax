@@ -177,7 +177,8 @@ pub fn run_with_limits(
     let mut ctx = Context::default();
     ctx.runtime_limits_mut()
         .set_loop_iteration_limit(limits.loop_iterations);
-    ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    ctx.runtime_limits_mut()
+        .set_recursion_limit(limits.recursion);
 
     let input_json = serde_json::to_string(input)?;
     // Embed as a JS string literal and parse inside the engine: JSON string
@@ -332,7 +333,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.error, None);
-        let summary: Vec<_> = out.tests.iter().map(|t| (t.name.as_str(), t.passed)).collect();
+        let summary: Vec<_> = out
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.passed))
+            .collect();
         assert_eq!(
             summary,
             vec![
@@ -406,16 +411,15 @@ mod tests {
         assert_eq!(out.error, None);
         assert!(out.skip_request);
         assert_eq!(out.request.headers[0].value, "Basic dXNlcjpwYXNz");
-        assert_eq!(
-            out.variable_changes.get("dec"),
-            Some(&Some("héllo".into()))
-        );
+        assert_eq!(out.variable_changes.get("dec"), Some(&Some("héllo".into())));
     }
 
     #[test]
     fn variables_resolve_in_precedence_order() {
         let mut input = pre(ScriptRequest::default());
-        input.collection_variables.insert("a".into(), "collection".into());
+        input
+            .collection_variables
+            .insert("a".into(), "collection".into());
         input.environment.insert("a".into(), "env".into());
         input.variables.insert("b".into(), "runtime".into());
         let out = run(

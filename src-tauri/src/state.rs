@@ -47,7 +47,10 @@ impl AppState {
     }
 
     /// Read-modify-write the registry.
-    pub fn update_registry<T>(&self, f: impl FnOnce(&mut Registry) -> CmdResult<T>) -> CmdResult<T> {
+    pub fn update_registry<T>(
+        &self,
+        f: impl FnOnce(&mut Registry) -> CmdResult<T>,
+    ) -> CmdResult<T> {
         static LOCK: Mutex<()> = Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut reg = self.registry()?;

@@ -32,17 +32,29 @@ pub async fn git_init(state: State<'_, AppState>, workspace_id: String) -> CmdRe
 }
 
 #[tauri::command]
-pub async fn git_stage(state: State<'_, AppState>, workspace_id: String, paths: Vec<String>) -> CmdResult<()> {
+pub async fn git_stage(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    paths: Vec<String>,
+) -> CmdResult<()> {
     blocking(&state, &workspace_id, move |g| g.stage(&paths)).await
 }
 
 #[tauri::command]
-pub async fn git_unstage(state: State<'_, AppState>, workspace_id: String, paths: Vec<String>) -> CmdResult<()> {
+pub async fn git_unstage(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    paths: Vec<String>,
+) -> CmdResult<()> {
     blocking(&state, &workspace_id, move |g| g.unstage(&paths)).await
 }
 
 #[tauri::command]
-pub async fn git_discard(state: State<'_, AppState>, workspace_id: String, paths: Vec<String>) -> CmdResult<()> {
+pub async fn git_discard(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    paths: Vec<String>,
+) -> CmdResult<()> {
     blocking(&state, &workspace_id, move |g| g.discard(&paths)).await
 }
 
@@ -62,17 +74,31 @@ pub async fn git_fetch(state: State<'_, AppState>, workspace_id: String) -> CmdR
 }
 
 #[tauri::command]
-pub async fn git_pull(state: State<'_, AppState>, workspace_id: String, mode: PullMode) -> CmdResult<MergeOutcome> {
+pub async fn git_pull(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    mode: PullMode,
+) -> CmdResult<MergeOutcome> {
     blocking(&state, &workspace_id, move |g| g.pull(mode)).await
 }
 
 #[tauri::command]
-pub async fn git_push(state: State<'_, AppState>, workspace_id: String, force_with_lease: bool) -> CmdResult<()> {
-    blocking(&state, &workspace_id, move |g| g.push(None, force_with_lease)).await
+pub async fn git_push(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    force_with_lease: bool,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        g.push(None, force_with_lease)
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn git_branches(state: State<'_, AppState>, workspace_id: String) -> CmdResult<Vec<Branch>> {
+pub async fn git_branches(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Vec<Branch>> {
     blocking(&state, &workspace_id, |g| g.branches()).await
 }
 
@@ -84,11 +110,18 @@ pub async fn git_create_branch(
     start: Option<String>,
     checkout: bool,
 ) -> CmdResult<()> {
-    blocking(&state, &workspace_id, move |g| g.create_branch(&name, start.as_deref(), checkout)).await
+    blocking(&state, &workspace_id, move |g| {
+        g.create_branch(&name, start.as_deref(), checkout)
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn git_checkout(state: State<'_, AppState>, workspace_id: String, name: String) -> CmdResult<()> {
+pub async fn git_checkout(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    name: String,
+) -> CmdResult<()> {
     blocking(&state, &workspace_id, move |g| g.checkout(&name)).await
 }
 
@@ -99,7 +132,10 @@ pub async fn git_delete_branch(
     name: String,
     force: bool,
 ) -> CmdResult<()> {
-    blocking(&state, &workspace_id, move |g| g.delete_branch(&name, force)).await
+    blocking(&state, &workspace_id, move |g| {
+        g.delete_branch(&name, force)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -140,7 +176,10 @@ pub async fn git_log(
     limit: usize,
     path: Option<String>,
 ) -> CmdResult<Vec<Commit>> {
-    blocking(&state, &workspace_id, move |g| g.log(rev.as_deref(), limit, path.as_deref())).await
+    blocking(&state, &workspace_id, move |g| {
+        g.log(rev.as_deref(), limit, path.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -150,11 +189,18 @@ pub async fn git_diff(
     path: Option<String>,
     staged: bool,
 ) -> CmdResult<String> {
-    blocking(&state, &workspace_id, move |g| g.diff(path.as_deref(), staged)).await
+    blocking(&state, &workspace_id, move |g| {
+        g.diff(path.as_deref(), staged)
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn git_show(state: State<'_, AppState>, workspace_id: String, commit: String) -> CmdResult<String> {
+pub async fn git_show(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    commit: String,
+) -> CmdResult<String> {
     blocking(&state, &workspace_id, move |g| g.show(&commit)).await
 }
 
@@ -179,7 +225,10 @@ pub async fn git_compare_url(
 }
 
 #[tauri::command]
-pub async fn git_remotes(state: State<'_, AppState>, workspace_id: String) -> CmdResult<Vec<Remote>> {
+pub async fn git_remotes(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Vec<Remote>> {
     blocking(&state, &workspace_id, |g| g.remotes()).await
 }
 
@@ -200,11 +249,18 @@ pub async fn git_set_remote_url(
     name: String,
     url: String,
 ) -> CmdResult<()> {
-    blocking(&state, &workspace_id, move |g| g.set_remote_url(&name, &url)).await
+    blocking(&state, &workspace_id, move |g| {
+        g.set_remote_url(&name, &url)
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn git_remove_remote(state: State<'_, AppState>, workspace_id: String, name: String) -> CmdResult<()> {
+pub async fn git_remove_remote(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    name: String,
+) -> CmdResult<()> {
     blocking(&state, &workspace_id, move |g| g.remove_remote(&name)).await
 }
 
@@ -220,12 +276,19 @@ pub async fn git_set_identity(
     name: String,
     email: String,
 ) -> CmdResult<()> {
-    blocking(&state, &workspace_id, move |g| g.set_identity(&name, &email)).await
+    blocking(&state, &workspace_id, move |g| {
+        g.set_identity(&name, &email)
+    })
+    .await
 }
 
 /// Run a sync pass right now (fetch + safe fast-forward).
 #[tauri::command]
-pub async fn sync_now(app: AppHandle, state: State<'_, AppState>, workspace_id: String) -> CmdResult<Option<SyncReport>> {
+pub async fn sync_now(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Option<SyncReport>> {
     let entry = state.entry(&workspace_id)?;
     Ok(crate::sync::run_pass(&app, &entry, true).await)
 }

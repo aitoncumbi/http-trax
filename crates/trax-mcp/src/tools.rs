@@ -5,8 +5,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 use trax_core::{
-    run_draft, run_group, run_saved, save_run_response, Environment, GroupMeta, GroupNode, Registry,
-    Request, RunOptions, TreeItem, Workspace,
+    run_draft, run_group, run_saved, save_run_response, Environment, GroupMeta, GroupNode,
+    Registry, Request, RunOptions, TreeItem, Workspace,
 };
 
 use crate::args::{self, opt_bool, opt_str, opt_u64, req_str};
@@ -315,7 +315,10 @@ fn workspace(server: &Server, args: &Value) -> Result<(Workspace, Option<String>
         .or_else(|| server.config.workspace.clone());
     if let Some(needle) = needle {
         if let Some(entry) = reg.find(&needle) {
-            return Ok((Workspace::open(&entry.path).map_err(err)?, Some(entry.id.clone())));
+            return Ok((
+                Workspace::open(&entry.path).map_err(err)?,
+                Some(entry.id.clone()),
+            ));
         }
         if Workspace::is_workspace(&needle) {
             let ws = Workspace::open(&needle).map_err(err)?;
@@ -327,7 +330,10 @@ fn workspace(server: &Server, args: &Value) -> Result<(Workspace, Option<String>
         ));
     }
     if let Some(entry) = reg.active() {
-        return Ok((Workspace::open(&entry.path).map_err(err)?, Some(entry.id.clone())));
+        return Ok((
+            Workspace::open(&entry.path).map_err(err)?,
+            Some(entry.id.clone()),
+        ));
     }
     if let Ok(cwd) = std::env::current_dir() {
         if Workspace::is_workspace(&cwd) {
@@ -360,22 +366,37 @@ fn find_collection<'a>(collections: &'a [GroupNode], needle: &str) -> Option<&'a
     collections
         .iter()
         .find(|c| c.meta.id == needle)
-        .or_else(|| collections.iter().find(|c| c.meta.name.eq_ignore_ascii_case(needle)))
+        .or_else(|| {
+            collections
+                .iter()
+                .find(|c| c.meta.name.eq_ignore_ascii_case(needle))
+        })
 }
 
 fn find_child_folder<'a>(node: &'a GroupNode, name: &str) -> Option<&'a GroupNode> {
     node.items.iter().find_map(|i| match i {
-        TreeItem::Folder(f) if f.meta.name.eq_ignore_ascii_case(name) || f.meta.id == name => Some(f),
+        TreeItem::Folder(f) if f.meta.name.eq_ignore_ascii_case(name) || f.meta.id == name => {
+            Some(f)
+        }
         _ => None,
     })
 }
 
 fn split_path(path: &str) -> Vec<String> {
-    path.split('/').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
+    path.split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Find (or create) the collection and folder path; returns the group id.
-fn ensure_group(ws: &Workspace, collection: &str, folder: Option<&str>, create: bool) -> Result<String, String> {
+fn ensure_group(
+    ws: &Workspace,
+    collection: &str,
+    folder: Option<&str>,
+    create: bool,
+) -> Result<String, String> {
     let tree = ws.tree().map_err(err)?;
     let mut current = match find_collection(&tree.collections, collection) {
         Some(c) => c.clone(),
@@ -386,7 +407,12 @@ fn ensure_group(ws: &Workspace, collection: &str, folder: Option<&str>, create: 
         current = match find_child_folder(&current, &part) {
             Some(f) => f.clone(),
             None if create => ws.create_folder(&current.meta.id, &part).map_err(err)?,
-            None => return Err(format!("folder `{part}` not found in `{}`", current.meta.name)),
+            None => {
+                return Err(format!(
+                    "folder `{part}` not found in `{}`",
+                    current.meta.name
+                ))
+            }
         };
     }
     Ok(current.meta.id)
@@ -405,7 +431,9 @@ fn resolve_request(ws: &Workspace, needle: &str) -> Result<String, String> {
         for item in &node.items {
             match item {
                 TreeItem::Folder(f) => walk(f, &here, out),
-                TreeItem::Request(r) => out.push((r.id.clone(), format!("{here}/{}", r.name), r.name.clone())),
+                TreeItem::Request(r) => {
+                    out.push((r.id.clone(), format!("{here}/{}", r.name), r.name.clone()))
+                }
             }
         }
     }
@@ -415,16 +443,28 @@ fn resolve_request(ws: &Workspace, needle: &str) -> Result<String, String> {
     if let Some((id, _, _)) = all.iter().find(|(id, _, _)| id == needle) {
         return Ok(id.clone());
     }
-    if let Some((id, _, _)) = all.iter().find(|(_, path, _)| path.eq_ignore_ascii_case(needle)) {
+    if let Some((id, _, _)) = all
+        .iter()
+        .find(|(_, path, _)| path.eq_ignore_ascii_case(needle))
+    {
         return Ok(id.clone());
     }
-    let by_name: Vec<_> = all.iter().filter(|(_, _, name)| name.eq_ignore_ascii_case(needle)).collect();
+    let by_name: Vec<_> = all
+        .iter()
+        .filter(|(_, _, name)| name.eq_ignore_ascii_case(needle))
+        .collect();
     match by_name.len() {
         1 => Ok(by_name[0].0.clone()),
-        0 => Err(format!("request `{needle}` not found. Use get_workspace to see what exists.")),
+        0 => Err(format!(
+            "request `{needle}` not found. Use get_workspace to see what exists."
+        )),
         _ => Err(format!(
             "`{needle}` is ambiguous; use the id or the full path: {}",
-            by_name.iter().map(|(id, path, _)| format!("{path} [{id}]")).collect::<Vec<_>>().join(", ")
+            by_name
+                .iter()
+                .map(|(id, path, _)| format!("{path} [{id}]"))
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     }
 }
@@ -449,10 +489,17 @@ fn list_workspaces(server: &Server) -> Result<ToolOutput, String> {
     for w in reg.workspaces() {
         text.push_str(&format!(
             "{} {} [{}]{} — {}\n",
-            if Some(&w.id) == active.as_ref() { "*" } else { "-" },
+            if Some(&w.id) == active.as_ref() {
+                "*"
+            } else {
+                "-"
+            },
             w.name,
             w.id,
-            w.team.as_ref().map(|t| format!(" (team {t})")).unwrap_or_default(),
+            w.team
+                .as_ref()
+                .map(|t| format!(" (team {t})"))
+                .unwrap_or_default(),
             w.path
         ));
     }
@@ -465,11 +512,13 @@ fn list_workspaces(server: &Server) -> Result<ToolOutput, String> {
 fn init_workspace(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let path = req_str(args, "path")?;
     let path = std::path::absolute(Path::new(path)).map_err(err)?;
-    let name = opt_str(args, "name").map(str::to_string).unwrap_or_else(|| {
-        path.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "API workspace".into())
-    });
+    let name = opt_str(args, "name")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "API workspace".into())
+        });
     let (ws, created) = if Workspace::is_workspace(&path) {
         (Workspace::open(&path).map_err(err)?, false)
     } else {
@@ -479,7 +528,11 @@ fn init_workspace(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let entry = reg.register(&ws).map_err(err)?;
     trax_core::registry::ensure_dir(reg.dir()).map_err(err)?;
     reg.save().map_err(err)?;
-    let verb = if created { "Created" } else { "Opened existing" };
+    let verb = if created {
+        "Created"
+    } else {
+        "Opened existing"
+    };
     Ok(ToolOutput::with(
         format!(
             "{verb} workspace \"{}\" [{}] at {}. It now shows up in the http-trax app.",
@@ -495,7 +548,10 @@ fn get_workspace(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let (ws, _) = workspace(server, args)?;
     let tree = ws.tree().map_err(err)?;
     let text = format::tree(&tree);
-    Ok(ToolOutput::with(text, serde_json::to_value(&tree).map_err(err)?))
+    Ok(ToolOutput::with(
+        text,
+        serde_json::to_value(&tree).map_err(err)?,
+    ))
 }
 
 fn get_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
@@ -548,11 +604,17 @@ fn upsert_collection(server: &Server, args: &Value) -> Result<ToolOutput, String
     if let Some(s) = args.get("scripts") {
         let mut current = serde_json::to_value(&meta.scripts).map_err(err)?;
         merge(&mut current, &args::scripts(s));
-        meta.scripts = serde_json::from_value(current).map_err(|e| format!("invalid scripts: {e}"))?;
+        meta.scripts =
+            serde_json::from_value(current).map_err(|e| format!("invalid scripts: {e}"))?;
     }
     ws.update_group(&meta).map_err(err)?;
     Ok(ToolOutput::with(
-        format!("{} collection \"{}\" [{}]", if created { "Created" } else { "Updated" }, meta.name, meta.id),
+        format!(
+            "{} collection \"{}\" [{}]",
+            if created { "Created" } else { "Updated" },
+            meta.name,
+            meta.id
+        ),
         json!({ "collection": meta, "created": created }),
     ))
 }
@@ -584,7 +646,9 @@ fn upsert_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
             group
                 .and_then(|g| {
                     g.items.iter().find_map(|i| match i {
-                        TreeItem::Request(r) if r.name.eq_ignore_ascii_case(name) => Some(r.id.clone()),
+                        TreeItem::Request(r) if r.name.eq_ignore_ascii_case(name) => {
+                            Some(r.id.clone())
+                        }
                         _ => None,
                     })
                 })
@@ -607,13 +671,22 @@ fn upsert_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
         }
     }
     if let Some(v) = args.get("params") {
-        overlay.insert("params".into(), serde_json::to_value(args::key_values(v)?).map_err(err)?);
+        overlay.insert(
+            "params".into(),
+            serde_json::to_value(args::key_values(v)?).map_err(err)?,
+        );
     }
     if let Some(v) = args.get("headers") {
-        overlay.insert("headers".into(), serde_json::to_value(args::key_values(v)?).map_err(err)?);
+        overlay.insert(
+            "headers".into(),
+            serde_json::to_value(args::key_values(v)?).map_err(err)?,
+        );
     }
     if let Some(v) = args.get("body") {
-        overlay.insert("body".into(), serde_json::to_value(args::body(v)?).map_err(err)?);
+        overlay.insert(
+            "body".into(),
+            serde_json::to_value(args::body(v)?).map_err(err)?,
+        );
     }
     if let Some(v) = args.get("auth") {
         overlay.insert("auth".into(), v.clone());
@@ -629,7 +702,8 @@ fn upsert_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
         overlay.insert("settings".into(), settings);
     }
     merge(&mut value, &Value::Object(overlay));
-    let request: Request = serde_json::from_value(value).map_err(|e| format!("invalid request: {e}"))?;
+    let request: Request =
+        serde_json::from_value(value).map_err(|e| format!("invalid request: {e}"))?;
     if request.url.trim().is_empty() {
         return Err("`url` is required for a new request".into());
     }
@@ -663,12 +737,16 @@ fn delete_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let id = resolve_request(&ws, req_str(args, "request")?)?;
     let name = ws.request(&id).map_err(err)?.name;
     ws.delete_request(&id).map_err(err)?;
-    Ok(ToolOutput::text(format!("Deleted request \"{name}\" [{id}]")))
+    Ok(ToolOutput::text(format!(
+        "Deleted request \"{name}\" [{id}]"
+    )))
 }
 
 fn output_opts(args: &Value) -> (usize, bool) {
     (
-        opt_u64(args, "max_body_chars").map(|n| n as usize).unwrap_or(format::DEFAULT_MAX_BODY),
+        opt_u64(args, "max_body_chars")
+            .map(|n| n as usize)
+            .unwrap_or(format::DEFAULT_MAX_BODY),
         opt_bool(args, "include_headers").unwrap_or(true),
     )
 }
@@ -682,7 +760,10 @@ async fn run_request(server: &Server, args: &Value) -> Result<ToolOutput, String
     let mut text = format::run_result(&result, max_body, headers);
     if let Some(name) = args.get("save_response_as").and_then(Value::as_str) {
         match save_run_response(&ws, &id, name, &result) {
-            Ok(saved) => text.push_str(&format!("Saved response as \"{}\" [{}]\n", saved.name, saved.id)),
+            Ok(saved) => text.push_str(&format!(
+                "Saved response as \"{}\" [{}]\n",
+                saved.name, saved.id
+            )),
             Err(e) => text.push_str(&format!("Could not save response: {e}\n")),
         }
     }
@@ -737,7 +818,11 @@ async fn run_collection(server: &Server, args: &Value) -> Result<ToolOutput, Str
 async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     // Ad-hoc requests work even without a workspace (no variables then).
     let ws_result = workspace(server, args);
-    let mut request = Request::new("Ad-hoc request", opt_str(args, "method").unwrap_or("GET"), req_str(args, "url")?);
+    let mut request = Request::new(
+        "Ad-hoc request",
+        opt_str(args, "method").unwrap_or("GET"),
+        req_str(args, "url")?,
+    );
     request.id = String::new();
     if let Some(v) = args.get("params") {
         request.params = args::key_values(v)?;
@@ -749,7 +834,8 @@ async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, 
         request.body = args::body(v)?;
     }
     if let Some(v) = args.get("auth") {
-        request.auth = serde_json::from_value(v.clone()).map_err(|e| format!("invalid auth: {e}"))?;
+        request.auth =
+            serde_json::from_value(v.clone()).map_err(|e| format!("invalid auth: {e}"))?;
     }
     if let Some(s) = args.get("pre_request_script").and_then(Value::as_str) {
         request.scripts.pre_request = s.to_string();
@@ -786,7 +872,9 @@ async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, 
     Ok(ToolOutput {
         text,
         structured: Some(structured),
-        is_error: result.error.is_some() || !result.script_errors.is_empty() || result.tests_failed() > 0,
+        is_error: result.error.is_some()
+            || !result.script_errors.is_empty()
+            || result.tests_failed() > 0,
     })
 }
 
@@ -807,13 +895,21 @@ fn list_environments(server: &Server, args: &Value) -> Result<ToolOutput, String
         let is_active = active
             .as_deref()
             .is_some_and(|a| a == env.id || a.eq_ignore_ascii_case(&env.name));
-        text.push_str(&format!("{} {} [{}]\n", if is_active { "*" } else { "-" }, env.name, env.id));
+        text.push_str(&format!(
+            "{} {} [{}]\n",
+            if is_active { "*" } else { "-" },
+            env.name,
+            env.id
+        ));
         let mut vars = BTreeMap::new();
         for v in &env.variables {
             let value = if v.secret {
                 "••••••".to_string()
             } else {
-                view.overrides.get(&v.key).cloned().unwrap_or_else(|| v.value.clone())
+                view.overrides
+                    .get(&v.key)
+                    .cloned()
+                    .unwrap_or_else(|| v.value.clone())
             };
             text.push_str(&format!(
                 "    {}{} = {}\n",
@@ -829,7 +925,9 @@ fn list_environments(server: &Server, args: &Value) -> Result<ToolOutput, String
                 vars.insert(k.clone(), v.clone());
             }
         }
-        list.push(json!({ "id": env.id, "name": env.name, "active": is_active, "variables": vars }));
+        list.push(
+            json!({ "id": env.id, "name": env.name, "active": is_active, "variables": vars }),
+        );
     }
     Ok(ToolOutput::with(text, json!({ "environments": list })))
 }
@@ -839,7 +937,9 @@ fn upsert_environment(server: &Server, args: &Value) -> Result<ToolOutput, Strin
     let name = req_str(args, "name")?;
     let existing = ws.find_environment(name).ok();
     let created = existing.is_none();
-    let mut env = existing.map(|v| v.environment).unwrap_or_else(|| Environment::new(name));
+    let mut env = existing
+        .map(|v| v.environment)
+        .unwrap_or_else(|| Environment::new(name));
     let incoming = match args.get("variables") {
         Some(v) => args::variables(v)?,
         None => Vec::new(),
@@ -878,7 +978,11 @@ fn upsert_environment(server: &Server, args: &Value) -> Result<ToolOutput, Strin
             env.name,
             env.id,
             env.variables.len(),
-            if activate { "; it is now the active environment" } else { "" }
+            if activate {
+                "; it is now the active environment"
+            } else {
+                ""
+            }
         ),
         json!({ "environment": { "id": env.id, "name": env.name }, "created": created, "active": activate }),
     ))
@@ -889,7 +993,10 @@ fn list_saved_responses(server: &Server, args: &Value) -> Result<ToolOutput, Str
     let id = resolve_request(&ws, req_str(args, "request")?)?;
     let saved = ws.saved_responses(&id).map_err(err)?;
     if saved.is_empty() {
-        return Ok(ToolOutput::with("No saved responses.", json!({ "responses": [] })));
+        return Ok(ToolOutput::with(
+            "No saved responses.",
+            json!({ "responses": [] }),
+        ));
     }
     let mut text = String::new();
     for s in &saved {

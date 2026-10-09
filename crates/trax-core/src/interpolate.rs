@@ -51,7 +51,9 @@ fn resolve(name: &str, vars: &BTreeMap<String, String>) -> Option<String> {
         "$uuid" | "$guid" | "$randomUUID" => Some(uuid::Uuid::new_v4().to_string()),
         "$timestamp" => Some(chrono::Utc::now().timestamp().to_string()),
         "$timestampMs" => Some(chrono::Utc::now().timestamp_millis().to_string()),
-        "$isoTimestamp" => Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        "$isoTimestamp" => {
+            Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        }
         "$randomInt" => {
             let n = uuid::Uuid::new_v4().as_u128() % 1001;
             Some(n.to_string())
@@ -82,13 +84,23 @@ mod tests {
     use super::*;
 
     fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn substitutes_and_nests() {
-        let v = vars(&[("host", "api.test"), ("base", "https://{{host}}/v1"), ("id", "7")]);
-        assert_eq!(interpolate("{{base}}/users/{{ id }}", &v), "https://api.test/v1/users/7");
+        let v = vars(&[
+            ("host", "api.test"),
+            ("base", "https://{{host}}/v1"),
+            ("id", "7"),
+        ]);
+        assert_eq!(
+            interpolate("{{base}}/users/{{ id }}", &v),
+            "https://api.test/v1/users/7"
+        );
     }
 
     #[test]

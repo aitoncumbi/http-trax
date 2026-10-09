@@ -3,7 +3,6 @@ name = "trax-core"
 description = "Workspaces, collections, environments, storage and the request runner for http-trax"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

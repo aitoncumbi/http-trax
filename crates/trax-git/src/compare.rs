@@ -7,12 +7,12 @@ pub fn web_url(remote: &str) -> Option<String> {
     let (host, path) = if let Some(rest) = remote.strip_prefix("git@") {
         let (host, path) = rest.split_once(':')?;
         (host.to_string(), path.to_string())
-    } else if let Some(rest) = remote
-        .strip_prefix("https://")
-        .or_else(|| remote.strip_prefix("http://"))
-        .or_else(|| remote.strip_prefix("ssh://"))
-        .or_else(|| remote.strip_prefix("git://"))
-    {
+    } else {
+        let rest = remote
+            .strip_prefix("https://")
+            .or_else(|| remote.strip_prefix("http://"))
+            .or_else(|| remote.strip_prefix("ssh://"))
+            .or_else(|| remote.strip_prefix("git://"))?;
         let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
         let (host, path) = rest.split_once('/')?;
         // Drop an SSH port (`host:2222`), keep HTTP ports.
@@ -22,8 +22,6 @@ pub fn web_url(remote: &str) -> Option<String> {
             host
         };
         (host.to_string(), path.to_string())
-    } else {
-        return None;
     };
     let path = path.trim_end_matches('/').trim_end_matches(".git");
     if host.is_empty() || path.is_empty() {
@@ -53,7 +51,11 @@ fn enc(s: &str) -> String {
 /// Link that opens a pull/merge request from `head` into `base`.
 pub fn compare_url(remote: &str, base: &str, head: &str) -> Option<String> {
     let web = web_url(remote)?;
-    let host = web.trim_start_matches("https://").split('/').next()?.to_lowercase();
+    let host = web
+        .trim_start_matches("https://")
+        .split('/')
+        .next()?
+        .to_lowercase();
     let (base, head) = (enc(base), enc(head));
     Some(if host.contains("gitlab") {
         format!(
@@ -75,7 +77,10 @@ mod tests {
 
     #[test]
     fn web_urls() {
-        assert_eq!(web_url("git@github.com:acme/api.git").unwrap(), "https://github.com/acme/api");
+        assert_eq!(
+            web_url("git@github.com:acme/api.git").unwrap(),
+            "https://github.com/acme/api"
+        );
         assert_eq!(
             web_url("https://user@gitlab.com/acme/team/api.git").unwrap(),
             "https://gitlab.com/acme/team/api"

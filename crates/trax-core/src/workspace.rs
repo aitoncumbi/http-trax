@@ -117,7 +117,10 @@ impl Workspace {
 
         let gitignore = root.join(".gitignore");
         let existing = fs::read_to_string(&gitignore).unwrap_or_default();
-        if !existing.lines().any(|l| l.trim() == ".trax/" || l.trim() == ".trax") {
+        if !existing
+            .lines()
+            .any(|l| l.trim() == ".trax/" || l.trim() == ".trax")
+        {
             let mut text = existing;
             if !text.is_empty() && !text.ends_with('\n') {
                 text.push('\n');
@@ -312,14 +315,22 @@ impl Workspace {
 
     pub fn group(&self, id: &str) -> Result<GroupMeta> {
         let (dir, is_collection) = self.find_group_dir(id)?;
-        read_yaml(&dir.join(if is_collection { COLLECTION_FILE } else { FOLDER_FILE }))
+        read_yaml(&dir.join(if is_collection {
+            COLLECTION_FILE
+        } else {
+            FOLDER_FILE
+        }))
     }
 
     /// Update a collection's or folder's settings. Renaming also renames the
     /// directory so the repository stays browsable.
     pub fn update_group(&self, meta: &GroupMeta) -> Result<()> {
         let (dir, is_collection) = self.find_group_dir(&meta.id)?;
-        let file = if is_collection { COLLECTION_FILE } else { FOLDER_FILE };
+        let file = if is_collection {
+            COLLECTION_FILE
+        } else {
+            FOLDER_FILE
+        };
         let current: GroupMeta = read_yaml(&dir.join(file))?;
         let mut dir = dir;
         if slugify(&current.name) != slugify(&meta.name) {
@@ -351,7 +362,9 @@ impl Workspace {
         let mut max = 0;
         for path in read_dir_sorted(dir)? {
             let seq = if path.is_dir() && path.join(FOLDER_FILE).is_file() {
-                read_yaml::<GroupMeta>(&path.join(FOLDER_FILE)).map(|m| m.seq).ok()
+                read_yaml::<GroupMeta>(&path.join(FOLDER_FILE))
+                    .map(|m| m.seq)
+                    .ok()
             } else if path.to_string_lossy().ends_with(REQUEST_SUFFIX) {
                 read_yaml::<Request>(&path).map(|r| r.seq).ok()
             } else {
@@ -419,7 +432,10 @@ impl Workspace {
         }
         check_id(&request.id)?;
         if self.find_request_path(&request.id).is_ok() {
-            return Err(Error::Invalid(format!("request id {} already exists", request.id)));
+            return Err(Error::Invalid(format!(
+                "request id {} already exists",
+                request.id
+            )));
         }
         if request.seq == 0 {
             request.seq = self.next_seq(&dir)?;
@@ -438,7 +454,11 @@ impl Workspace {
         normalise(&mut request);
         let stem = path
             .file_name()
-            .map(|n| n.to_string_lossy().trim_end_matches(REQUEST_SUFFIX).to_string())
+            .map(|n| {
+                n.to_string_lossy()
+                    .trim_end_matches(REQUEST_SUFFIX)
+                    .to_string()
+            })
             .unwrap_or_default();
         let slug = slugify(&request.name);
         if !stem_matches(&stem, &slug) {
@@ -459,7 +479,12 @@ impl Workspace {
 
     pub fn duplicate_request(&self, id: &str) -> Result<Request> {
         let ctx = self.request_context(id)?;
-        let parent = ctx.ancestors.last().expect("request has a parent").id.clone();
+        let parent = ctx
+            .ancestors
+            .last()
+            .expect("request has a parent")
+            .id
+            .clone();
         let mut copy = ctx.request.clone();
         copy.id = new_id();
         copy.name = format!("{} copy", ctx.request.name);
@@ -669,7 +694,7 @@ impl Workspace {
                 }
             }
         }
-        out.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+        out.sort_by_key(|r| std::cmp::Reverse(r.saved_at));
         Ok(out)
     }
 
@@ -771,7 +796,10 @@ mod tests {
         let get = ws.create_request(&users.meta.id, get).unwrap();
         assert_eq!(get.method, "GET");
         let del = ws
-            .create_request(&admin.meta.id, Request::new("Delete user", "DELETE", "/users/1"))
+            .create_request(
+                &admin.meta.id,
+                Request::new("Delete user", "DELETE", "/users/1"),
+            )
             .unwrap();
 
         let tree = ws.tree().unwrap();
@@ -788,15 +816,22 @@ mod tests {
         assert_eq!(names, ["Users API", "Admin"]);
 
         // Multi-line scripts are stored as YAML block scalars (readable diffs).
-        let text = fs::read_to_string(ws.root().join("collections/users-api/get-user.req.yaml")).unwrap();
+        let text =
+            fs::read_to_string(ws.root().join("collections/users-api/get-user.req.yaml")).unwrap();
         assert!(text.contains("postResponse: |"), "{text}");
 
         // Rename moves the file.
         let mut renamed = ws.request(&get.id).unwrap();
         renamed.name = "Fetch user".into();
         ws.save_request(&renamed).unwrap();
-        assert!(ws.root().join("collections/users-api/fetch-user.req.yaml").is_file());
-        assert!(!ws.root().join("collections/users-api/get-user.req.yaml").exists());
+        assert!(ws
+            .root()
+            .join("collections/users-api/fetch-user.req.yaml")
+            .is_file());
+        assert!(!ws
+            .root()
+            .join("collections/users-api/get-user.req.yaml")
+            .exists());
 
         let copy = ws.duplicate_request(&get.id).unwrap();
         assert_eq!(copy.name, "Fetch user copy");
@@ -814,7 +849,10 @@ mod tests {
         let mut meta = c.meta.clone();
         meta.name = "Payments".into();
         ws.update_group(&meta).unwrap();
-        assert!(ws.root().join("collections/payments/collection.yaml").is_file());
+        assert!(ws
+            .root()
+            .join("collections/payments/collection.yaml")
+            .is_file());
         assert_eq!(ws.group(&c.meta.id).unwrap().name, "Payments");
     }
 
@@ -822,7 +860,8 @@ mod tests {
     fn broken_files_are_reported_not_fatal() {
         let (_dir, ws) = ws();
         let c = ws.create_collection("C").unwrap();
-        ws.create_request(&c.meta.id, Request::new("ok", "GET", "/")).unwrap();
+        ws.create_request(&c.meta.id, Request::new("ok", "GET", "/"))
+            .unwrap();
         fs::write(
             ws.root().join("collections/c/bad.req.yaml"),
             "<<<<<<< HEAD\nid: x\n=======\nid: y\n>>>>>>> theirs\n",
@@ -838,7 +877,8 @@ mod tests {
     fn environments_keep_secrets_local() {
         let (_dir, ws) = ws();
         let mut env = Environment::new("Dev");
-        env.variables.push(Variable::new("baseUrl", "http://localhost:8080"));
+        env.variables
+            .push(Variable::new("baseUrl", "http://localhost:8080"));
         let mut secret = Variable::new("apiKey", "s3cr3t");
         secret.secret = true;
         env.variables.push(secret);
@@ -866,7 +906,9 @@ mod tests {
     fn saved_responses_round_trip() {
         let (_dir, ws) = ws();
         let c = ws.create_collection("C").unwrap();
-        let r = ws.create_request(&c.meta.id, Request::new("r", "GET", "/")).unwrap();
+        let r = ws
+            .create_request(&c.meta.id, Request::new("r", "GET", "/"))
+            .unwrap();
         let saved = SavedResponse {
             id: new_id(),
             request_id: r.id.clone(),

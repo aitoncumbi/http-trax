@@ -3,7 +3,6 @@ name = "trax-git"
 description = "Git integration for http-trax: status, commit, pull/push, branches, merge, review and background sync"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

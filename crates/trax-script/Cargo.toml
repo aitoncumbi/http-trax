@@ -3,7 +3,6 @@ name = "trax-script"
 description = "Sandboxed JavaScript runtime for http-trax pre-request and post-response scripts"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

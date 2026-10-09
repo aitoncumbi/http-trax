@@ -257,7 +257,11 @@ mod tests {
         reg.register(&wa).unwrap();
         assert_eq!(reg.workspaces().len(), 2);
 
-        reg.get_mut(&eb.id).unwrap().prefs.bookmarks.push("c1".into());
+        reg.get_mut(&eb.id)
+            .unwrap()
+            .prefs
+            .bookmarks
+            .push("c1".into());
         reg.set_active(&eb.id).unwrap();
         reg.save().unwrap();
 

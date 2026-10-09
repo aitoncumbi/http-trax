@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "description": "Git-native API client with scripting and an MCP server for AI agents",
-  "license": "MIT",
   "scripts": {
     "dev": "next dev --port 3000",
     "build": "next build",

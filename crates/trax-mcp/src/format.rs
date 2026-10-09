@@ -21,7 +21,10 @@ pub fn truncate(text: &str, max: usize) -> String {
         return text.to_string();
     }
     let cut: String = text.chars().take(max).collect();
-    format!("{cut}\n… [truncated, {} more characters]", text.chars().count() - max)
+    format!(
+        "{cut}\n… [truncated, {} more characters]",
+        text.chars().count() - max
+    )
 }
 
 /// Pretty-print JSON bodies so the model can read them.
@@ -62,10 +65,19 @@ pub fn run_result(r: &RunResult, max_body: usize, include_headers: bool) -> Stri
         }
     }
     for e in &r.script_errors {
-        let _ = writeln!(s, "Script error ({} / {}): {}", e.phase, e.source, e.message);
+        let _ = writeln!(
+            s,
+            "Script error ({} / {}): {}",
+            e.phase, e.source, e.message
+        );
     }
     if !r.tests.is_empty() {
-        let _ = writeln!(s, "Tests: {} passed, {} failed", r.tests_passed(), r.tests_failed());
+        let _ = writeln!(
+            s,
+            "Tests: {} passed, {} failed",
+            r.tests_passed(),
+            r.tests_failed()
+        );
         for t in &r.tests {
             let mark = if t.skipped {
                 "-"
@@ -84,7 +96,11 @@ pub fn run_result(r: &RunResult, max_body: usize, include_headers: bool) -> Stri
             }
         }
     }
-    let logs: Vec<_> = r.logs.iter().filter(|l| l.source != "runner" || l.level == "warn").collect();
+    let logs: Vec<_> = r
+        .logs
+        .iter()
+        .filter(|l| l.source != "runner" || l.level == "warn")
+        .collect();
     if !logs.is_empty() {
         let _ = writeln!(s, "Console:");
         for l in logs {
@@ -127,9 +143,16 @@ pub fn report(r: &CollectionRunReport) -> String {
         r.duration_ms
     );
     for i in &r.items {
-        let status = i.status.map(|s| s.to_string()).unwrap_or_else(|| "—".into());
+        let status = i
+            .status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "—".into());
         let mark = if i.ok { "✓" } else { "✗" };
-        let _ = write!(s, "{mark} {} {} [{}] {} → {}", i.method, i.name, i.request_id, i.url, status);
+        let _ = write!(
+            s,
+            "{mark} {} {} [{}] {} → {}",
+            i.method, i.name, i.request_id, i.url, status
+        );
         if i.passed + i.failed > 0 {
             let _ = write!(s, " (tests {}/{})", i.passed, i.passed + i.failed);
         }
@@ -143,7 +166,11 @@ pub fn report(r: &CollectionRunReport) -> String {
 
 pub fn tree(t: &WorkspaceTree) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "Workspace \"{}\" [{}] at {}", t.manifest.name, t.manifest.id, t.root);
+    let _ = writeln!(
+        s,
+        "Workspace \"{}\" [{}] at {}",
+        t.manifest.name, t.manifest.id, t.root
+    );
     if t.collections.is_empty() {
         let _ = writeln!(s, "(no collections yet)");
     }
@@ -153,7 +180,11 @@ pub fn tree(t: &WorkspaceTree) -> String {
     if t.environments.is_empty() {
         let _ = writeln!(s, "Environments: none");
     } else {
-        let names: Vec<_> = t.environments.iter().map(|e| e.environment.name.clone()).collect();
+        let names: Vec<_> = t
+            .environments
+            .iter()
+            .map(|e| e.environment.name.clone())
+            .collect();
         let _ = writeln!(s, "Environments: {}", names.join(", "));
     }
     for p in &t.problems {
@@ -164,7 +195,13 @@ pub fn tree(t: &WorkspaceTree) -> String {
 
 fn group(s: &mut String, g: &GroupNode, depth: usize, kind: &str) {
     let pad = "  ".repeat(depth);
-    let _ = writeln!(s, "{pad}{} {} [{}]", if kind == "collection" { "▸" } else { "▹" }, g.meta.name, g.meta.id);
+    let _ = writeln!(
+        s,
+        "{pad}{} {} [{}]",
+        if kind == "collection" { "▸" } else { "▹" },
+        g.meta.name,
+        g.meta.id
+    );
     for item in &g.items {
         match item {
             TreeItem::Folder(f) => group(s, f, depth + 1, "folder"),

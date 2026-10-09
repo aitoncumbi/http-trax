@@ -173,7 +173,10 @@ fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
         .map(|a| &a.headers)
         .chain(std::iter::once(&request.headers));
     for list in levels {
-        for kv in list.iter().filter(|kv| kv.enabled && !kv.key.trim().is_empty()) {
+        for kv in list
+            .iter()
+            .filter(|kv| kv.enabled && !kv.key.trim().is_empty())
+        {
             set_header(&mut out, kv.key.trim(), kv.value.clone());
         }
     }
@@ -217,7 +220,13 @@ fn append_query(url: &mut String, pairs: &[(String, String)]) {
     }
     let query = pairs
         .iter()
-        .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
+        .map(|(k, v)| {
+            if v.is_empty() {
+                k.clone()
+            } else {
+                format!("{k}={v}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("&");
     let (base, fragment) = match url.find('#') {
@@ -239,7 +248,11 @@ fn encode(s: &str) -> String {
 }
 
 /// Build the body from the request model after variables are resolved.
-fn build_body(ws: &Workspace, body: &Body, vars: &BTreeMap<String, String>) -> std::result::Result<PreparedBody, String> {
+fn build_body(
+    ws: &Workspace,
+    body: &Body,
+    vars: &BTreeMap<String, String>,
+) -> std::result::Result<PreparedBody, String> {
     Ok(match body {
         Body::None => PreparedBody::None,
         Body::Json { text } | Body::Xml { text } | Body::Text { text, .. } => {
@@ -307,11 +320,18 @@ async fn run_script(
         .map_err(|e| e.to_string())
 }
 
-fn script_info(request: &Request, ancestors: &[GroupMeta], env_name: &str) -> trax_script::ScriptInfo {
+fn script_info(
+    request: &Request,
+    ancestors: &[GroupMeta],
+    env_name: &str,
+) -> trax_script::ScriptInfo {
     trax_script::ScriptInfo {
         request_name: request.name.clone(),
         request_id: request.id.clone(),
-        collection_name: ancestors.first().map(|a| a.name.clone()).unwrap_or_default(),
+        collection_name: ancestors
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_default(),
         environment_name: env_name.to_string(),
     }
 }
@@ -388,7 +408,8 @@ async fn execute(
 
     // 2. Pre-request scripts.
     for (source, code) in pre {
-        let mut input = trax_script::ScriptInput::new(trax_script::Phase::PreRequest, script_req.clone());
+        let mut input =
+            trax_script::ScriptInput::new(trax_script::Phase::PreRequest, script_req.clone());
         input.environment = session.env.clone();
         input.variables = session.runtime.clone();
         input.collection_variables = {
@@ -438,7 +459,12 @@ async fn execute(
     };
     let missing: Vec<String> = unresolved(&script_req.url, &vars)
         .into_iter()
-        .chain(script_req.headers.iter().flat_map(|h| unresolved(&h.value, &vars)))
+        .chain(
+            script_req
+                .headers
+                .iter()
+                .flat_map(|h| unresolved(&h.value, &vars)),
+        )
         .collect();
     for name in missing {
         result.logs.push(LogEntry {
@@ -452,21 +478,35 @@ async fn execute(
     // 4. Auth.
     match effective_auth(request, ancestors) {
         Auth::Bearer { token } if !has_header(&sent.headers, "authorization") => {
-            sent.headers.push(Header::new("Authorization", format!("Bearer {}", interpolate(&token, &vars))));
+            sent.headers.push(Header::new(
+                "Authorization",
+                format!("Bearer {}", interpolate(&token, &vars)),
+            ));
         }
         Auth::Basic { username, password } if !has_header(&sent.headers, "authorization") => {
-            let raw = format!("{}:{}", interpolate(&username, &vars), interpolate(&password, &vars));
+            let raw = format!(
+                "{}:{}",
+                interpolate(&username, &vars),
+                interpolate(&password, &vars)
+            );
             let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
-            sent.headers.push(Header::new("Authorization", format!("Basic {encoded}")));
+            sent.headers
+                .push(Header::new("Authorization", format!("Basic {encoded}")));
         }
-        Auth::ApiKey { key, value, location } if !key.is_empty() => {
+        Auth::ApiKey {
+            key,
+            value,
+            location,
+        } if !key.is_empty() => {
             let key = interpolate(&key, &vars);
             let value = interpolate(&value, &vars);
             match location {
                 ApiKeyLocation::Header if !has_header(&sent.headers, &key) => {
                     sent.headers.push(Header::new(key, value))
                 }
-                ApiKeyLocation::Query => append_query(&mut sent.url, &[(encode(&key), encode(&value))]),
+                ApiKeyLocation::Query => {
+                    append_query(&mut sent.url, &[(encode(&key), encode(&value))])
+                }
                 _ => {}
             }
         }
@@ -492,7 +532,8 @@ async fn execute(
     };
     if matches!(body, PreparedBody::Multipart(_)) {
         // reqwest sets multipart/form-data with the boundary itself.
-        sent.headers.retain(|h| !h.key.eq_ignore_ascii_case("content-type"));
+        sent.headers
+            .retain(|h| !h.key.eq_ignore_ascii_case("content-type"));
     }
     sent.body = body.describe();
     result.request = sent.clone();
@@ -541,7 +582,8 @@ async fn execute(
         body: sent.body.clone(),
     };
     for (source, code) in post {
-        let mut input = trax_script::ScriptInput::new(trax_script::Phase::PostResponse, final_request.clone());
+        let mut input =
+            trax_script::ScriptInput::new(trax_script::Phase::PostResponse, final_request.clone());
         input.response = Some(script_response.clone());
         input.environment = session.env.clone();
         input.variables = session.runtime.clone();
@@ -692,7 +734,12 @@ pub async fn run_group(
 }
 
 /// Save the response of a run against its request.
-pub fn save_run_response(ws: &Workspace, request_id: &str, name: &str, run: &RunResult) -> Result<SavedResponse> {
+pub fn save_run_response(
+    ws: &Workspace,
+    request_id: &str,
+    name: &str,
+    run: &RunResult,
+) -> Result<SavedResponse> {
     let response = run
         .response
         .clone()
@@ -701,7 +748,9 @@ pub fn save_run_response(ws: &Workspace, request_id: &str, name: &str, run: &Run
         id: new_id(),
         request_id: request_id.to_string(),
         name: if name.trim().is_empty() {
-            format!("{} {}", response.status, response.status_text).trim().to_string()
+            format!("{} {}", response.status, response.status_text)
+                .trim()
+                .to_string()
         } else {
             name.trim().to_string()
         },
@@ -719,14 +768,22 @@ mod tests {
     use wiremock::matchers::{body_string, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    async fn setup() -> (tempfile::TempDir, Workspace, MockServer, GroupMeta, Environment) {
+    async fn setup() -> (
+        tempfile::TempDir,
+        Workspace,
+        MockServer,
+        GroupMeta,
+        Environment,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::init(dir.path(), "Test").unwrap();
         let server = MockServer::start().await;
         let col = ws.create_collection("Users").unwrap();
         let mut meta = col.meta.clone();
         meta.headers.push(KeyValue::new("X-Team", "core"));
-        meta.auth = Auth::Bearer { token: "{{token}}".into() };
+        meta.auth = Auth::Bearer {
+            token: "{{token}}".into(),
+        };
         meta.variables.push(Variable::new("apiVersion", "v1"));
         ws.update_group(&meta).unwrap();
         let mut env = Environment::new("Local");
@@ -752,19 +809,25 @@ mod tests {
             .and(header("authorization", "Bearer initial"))
             .and(header("content-type", "application/json"))
             .and(body_string(r#"{"user":"ada"}"#))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"token": "fresh"})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"token": "fresh"})),
+            )
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/v1/me"))
             .and(query_param("verbose", "true"))
             .and(header("authorization", "Bearer fresh"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"name": "Ada"})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"name": "Ada"})),
+            )
             .mount(&server)
             .await;
 
         let mut login = Request::new("Login", "POST", "{{baseUrl}}/{{apiVersion}}/login");
-        login.body = Body::Json { text: r#"{"user":"{{user}}"}"#.into() };
+        login.body = Body::Json {
+            text: r#"{"user":"{{user}}"}"#.into(),
+        };
         login.scripts.pre_request = "trax.vars.set('user', 'ada');".into();
         login.scripts.post_response = r#"
             trax.test("logged in", () => expect(trax.response.status).toBe(200));
@@ -792,10 +855,14 @@ mod tests {
         assert_eq!(results[1].logs[0].message, "hello 200");
 
         // The token set by the script is a local override, not a git change.
-        let shared = std::fs::read_to_string(ws.root().join("environments/local.env.yaml")).unwrap();
+        let shared =
+            std::fs::read_to_string(ws.root().join("environments/local.env.yaml")).unwrap();
         assert!(shared.contains("initial"));
         let view = ws.environment(&env.id).unwrap();
-        assert_eq!(view.overrides.get("token").map(String::as_str), Some("fresh"));
+        assert_eq!(
+            view.overrides.get("token").map(String::as_str),
+            Some("fresh")
+        );
         assert_eq!(ws.local_state().unwrap().runtime_variables["user"], "ada");
 
         // Saving a response.
@@ -829,7 +896,10 @@ mod tests {
             .mount(&server)
             .await;
         let mut draft = Request::new("Form", "post", "{{baseUrl}}/form");
-        draft.auth = Auth::Basic { username: "user".into(), password: "{{pw}}".into() };
+        draft.auth = Auth::Basic {
+            username: "user".into(),
+            password: "{{pw}}".into(),
+        };
         draft.body = Body::FormUrlencoded {
             fields: vec![KeyValue::new("a", "1 2"), KeyValue::new("b", "&")],
         };
@@ -837,11 +907,17 @@ mod tests {
         o.variables.insert("pw".into(), "pw".into());
         o.persist = false;
         let result = run_draft(&ws, &draft, Some(&col.id), &o).await.unwrap();
-        assert_eq!(result.response.as_ref().map(|r| r.status), Some(201), "{result:#?}");
+        assert_eq!(
+            result.response.as_ref().map(|r| r.status),
+            Some(201),
+            "{result:#?}"
+        );
 
         let mut bad = Request::new("Down", "GET", "http://127.0.0.1:9/nothing");
         bad.settings.timeout_ms = Some(2000);
-        let result = run_draft(&ws, &bad, None, &RunOptions::default()).await.unwrap();
+        let result = run_draft(&ws, &bad, None, &RunOptions::default())
+            .await
+            .unwrap();
         assert!(result.error.is_some());
         assert!(result.response.is_none());
     }

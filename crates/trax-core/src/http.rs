@@ -96,9 +96,11 @@ pub fn normalise_url(url: &str) -> String {
 pub async fn send(req: &HttpRequest) -> Result<ResponseData, String> {
     let method = Method::from_bytes(req.method.trim().to_uppercase().as_bytes())
         .map_err(|_| format!("invalid HTTP method {:?}", req.method))?;
-    let url = url::Url::parse(&normalise_url(&req.url)).map_err(|e| format!("invalid URL {:?}: {e}", req.url))?;
+    let url = url::Url::parse(&normalise_url(&req.url))
+        .map_err(|e| format!("invalid URL {:?}: {e}", req.url))?;
     let client = client(req.settings.follow_redirects, req.settings.verify_tls)?;
-    let timeout = Duration::from_millis(req.settings.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).max(1));
+    let timeout =
+        Duration::from_millis(req.settings.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).max(1));
 
     let mut builder = client.request(method, url).timeout(timeout);
     for h in &req.headers {

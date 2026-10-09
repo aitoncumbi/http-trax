@@ -52,7 +52,13 @@ fn spawn_debouncer(app: AppHandle, key: String, rx: mpsc::Receiver<()>) {
     });
 }
 
-fn make_watcher(app: &AppHandle, key: &str, path: &Path, mode: RecursiveMode, filter_registry: bool) -> notify::Result<RecommendedWatcher> {
+fn make_watcher(
+    app: &AppHandle,
+    key: &str,
+    path: &Path,
+    mode: RecursiveMode,
+    filter_registry: bool,
+) -> notify::Result<RecommendedWatcher> {
     let (tx, rx) = mpsc::channel::<()>();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         let Ok(event) = event else { return };
@@ -83,7 +89,13 @@ pub fn refresh(app: &AppHandle) {
 
     if !watchers.contains_key(REGISTRY_KEY) {
         let _ = std::fs::create_dir_all(&state.home);
-        match make_watcher(app, REGISTRY_KEY, &state.home, RecursiveMode::NonRecursive, true) {
+        match make_watcher(
+            app,
+            REGISTRY_KEY,
+            &state.home,
+            RecursiveMode::NonRecursive,
+            true,
+        ) {
             Ok(w) => {
                 watchers.insert(REGISTRY_KEY.to_string(), w);
             }
@@ -97,7 +109,13 @@ pub fn refresh(app: &AppHandle) {
         if watchers.contains_key(&entry.id) {
             continue;
         }
-        match make_watcher(app, &entry.id, Path::new(&entry.path), RecursiveMode::Recursive, false) {
+        match make_watcher(
+            app,
+            &entry.id,
+            Path::new(&entry.path),
+            RecursiveMode::Recursive,
+            false,
+        ) {
             Ok(w) => {
                 watchers.insert(entry.id.clone(), w);
             }

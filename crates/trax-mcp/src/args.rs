@@ -7,7 +7,10 @@ use serde_json::{json, Map, Value};
 use trax_core::{Body, KeyValue, Variable};
 
 pub fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 pub fn req_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -42,7 +45,10 @@ pub fn string_map(v: Option<&Value>) -> BTreeMap<String, String> {
         Some(Value::Array(items)) => {
             for item in items {
                 if let Some(k) = item.get("key").and_then(Value::as_str) {
-                    out.insert(k.to_string(), item.get("value").map(scalar_to_string).unwrap_or_default());
+                    out.insert(
+                        k.to_string(),
+                        item.get("value").map(scalar_to_string).unwrap_or_default(),
+                    );
                 }
             }
         }
@@ -137,7 +143,9 @@ pub fn body(v: &Value) -> Result<Body, String> {
             }
             serde_json::from_value(Value::Object(map)).map_err(|e| format!("invalid body: {e}"))
         }
-        other => Ok(Body::Json { text: pretty(other) }),
+        other => Ok(Body::Json {
+            text: pretty(other),
+        }),
     }
 }
 
@@ -167,12 +175,22 @@ mod tests {
 
     #[test]
     fn bodies() {
-        assert_eq!(body(&json!({"a": 1})).unwrap(), Body::Json { text: "{\n  \"a\": 1\n}".into() });
-        assert!(matches!(body(&json!("{\"a\":1}")).unwrap(), Body::Json { .. }));
+        assert_eq!(
+            body(&json!({"a": 1})).unwrap(),
+            Body::Json {
+                text: "{\n  \"a\": 1\n}".into()
+            }
+        );
+        assert!(matches!(
+            body(&json!("{\"a\":1}")).unwrap(),
+            Body::Json { .. }
+        ));
         assert!(matches!(body(&json!("plain")).unwrap(), Body::Text { .. }));
         assert_eq!(
             body(&json!({"mode": "json", "json": {"b": true}})).unwrap(),
-            Body::Json { text: "{\n  \"b\": true\n}".into() }
+            Body::Json {
+                text: "{\n  \"b\": true\n}".into()
+            }
         );
         match body(&json!({"mode": "form-urlencoded", "fields": {"a": 1}})).unwrap() {
             Body::FormUrlencoded { fields } => assert_eq!(fields[0].value, "1"),
@@ -182,8 +200,14 @@ mod tests {
 
     #[test]
     fn maps_and_lists() {
-        assert_eq!(key_values(&json!({"Accept": "x"})).unwrap()[0].key, "Accept");
-        assert_eq!(key_values(&json!([{"key": "n", "value": 5}])).unwrap()[0].value, "5");
+        assert_eq!(
+            key_values(&json!({"Accept": "x"})).unwrap()[0].key,
+            "Accept"
+        );
+        assert_eq!(
+            key_values(&json!([{"key": "n", "value": 5}])).unwrap()[0].value,
+            "5"
+        );
         assert_eq!(string_map(Some(&json!({"id": 7})))["id"], "7");
         assert!(variables(&json!([{"key": "k", "value": "v", "secret": true}])).unwrap()[0].secret);
         assert_eq!(scripts(&json!({"tests": "x"}))["postResponse"], "x");

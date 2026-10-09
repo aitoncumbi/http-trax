@@ -42,16 +42,22 @@ pub fn status(out: &str, prefix: &str) -> RepoStatus {
         let file = match kind {
             '1' => {
                 let parts: Vec<&str> = rec.splitn(9, ' ').collect();
-                parts.get(8).map(|path| entry(parts[1], path, None, false, prefix))
+                parts
+                    .get(8)
+                    .map(|path| entry(parts[1], path, None, false, prefix))
             }
             '2' => {
                 let parts: Vec<&str> = rec.splitn(10, ' ').collect();
                 let orig = records.next().map(str::to_string);
-                parts.get(9).map(|path| entry(parts[1], path, orig, false, prefix))
+                parts
+                    .get(9)
+                    .map(|path| entry(parts[1], path, orig, false, prefix))
             }
             'u' => {
                 let parts: Vec<&str> = rec.splitn(11, ' ').collect();
-                parts.get(10).map(|path| entry(parts[1], path, None, true, prefix))
+                parts
+                    .get(10)
+                    .map(|path| entry(parts[1], path, None, true, prefix))
             }
             '?' => Some(FileStatus {
                 path: rec[2..].to_string(),
@@ -233,7 +239,8 @@ u UU N... 100644 100644 100644 100644 h1 h2 h3 src/main.rs\0\
 
     #[test]
     fn parses_branches_and_commits() {
-        let out = "refs/heads/main\x1fmain\x1f*\x1forigin/main\x1fahead 1, behind 2\x1finit\x1f100\x1e\n\
+        let out =
+            "refs/heads/main\x1fmain\x1f*\x1forigin/main\x1fahead 1, behind 2\x1finit\x1f100\x1e\n\
 refs/remotes/origin/HEAD\x1forigin\x1f \x1f\x1f\x1f\x1f\x1e\n\
 refs/remotes/origin/main\x1forigin/main\x1f \x1f\x1f\x1finit\x1f100\x1e\n";
         let b = branches(out);

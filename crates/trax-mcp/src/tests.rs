@@ -30,7 +30,9 @@ impl Harness {
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Value {
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let response = self
             .server
             .handle(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
@@ -41,11 +43,22 @@ impl Harness {
     }
 
     async fn tool(&self, name: &str, arguments: Value) -> (String, Value, bool) {
-        let r = self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await;
+        let r = self
+            .rpc(
+                "tools/call",
+                json!({ "name": name, "arguments": arguments }),
+            )
+            .await;
         let result = &r["result"];
         (
-            result["content"][0]["text"].as_str().unwrap_or("").to_string(),
-            result.get("structuredContent").cloned().unwrap_or(Value::Null),
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            result
+                .get("structuredContent")
+                .cloned()
+                .unwrap_or(Value::Null),
             result["isError"].as_bool().unwrap_or(false),
         )
     }
@@ -59,8 +72,13 @@ async fn protocol_basics() {
         .await;
     assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(init["result"]["serverInfo"]["name"], "http-trax");
-    let init = h.rpc("initialize", json!({ "protocolVersion": "1999-01-01" })).await;
-    assert_eq!(init["result"]["protocolVersion"], SUPPORTED_PROTOCOL_VERSIONS[0]);
+    let init = h
+        .rpc("initialize", json!({ "protocolVersion": "1999-01-01" }))
+        .await;
+    assert_eq!(
+        init["result"]["protocolVersion"],
+        SUPPORTED_PROTOCOL_VERSIONS[0]
+    );
 
     assert!(h
         .server
@@ -77,7 +95,12 @@ async fn protocol_basics() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    for expected in ["init_workspace", "upsert_request", "run_collection", "send_http_request"] {
+    for expected in [
+        "init_workspace",
+        "upsert_request",
+        "run_collection",
+        "send_http_request",
+    ] {
         assert!(names.contains(&expected.to_string()), "{names:?}");
     }
     for t in tools["result"]["tools"].as_array().unwrap() {
@@ -111,13 +134,19 @@ async fn agent_builds_and_runs_a_suite() {
     let h = Harness::new();
     let ws_dir = h.repo.path().join("api-tests");
     let (text, _, err) = h
-        .tool("init_workspace", json!({ "path": ws_dir.to_string_lossy(), "name": "Users service" }))
+        .tool(
+            "init_workspace",
+            json!({ "path": ws_dir.to_string_lossy(), "name": "Users service" }),
+        )
         .await;
     assert!(!err, "{text}");
     assert!(text.contains("Created workspace"));
 
     let (text, _, err) = h
-        .tool("upsert_environment", json!({ "name": "local", "variables": { "baseUrl": api.uri(), "apiKey": "k" } }))
+        .tool(
+            "upsert_environment",
+            json!({ "name": "local", "variables": { "baseUrl": api.uri(), "apiKey": "k" } }),
+        )
         .await;
     assert!(!err, "{text}");
     assert!(text.contains("active environment"));
@@ -175,7 +204,9 @@ async fn agent_builds_and_runs_a_suite() {
     let (outline, _, _) = h.tool("get_workspace", json!({})).await;
     assert!(outline.contains("Delete user"), "{outline}");
 
-    let (text, report, is_error) = h.tool("run_collection", json!({ "collection": "users" })).await;
+    let (text, report, is_error) = h
+        .tool("run_collection", json!({ "collection": "users" }))
+        .await;
     assert!(is_error, "the delete endpoint is broken: {text}");
     assert_eq!(report["total"], 3);
     assert_eq!(report["succeeded"], 2);
@@ -183,16 +214,24 @@ async fn agent_builds_and_runs_a_suite() {
     assert!(text.contains("Expected: 500 to be 204"), "{text}");
 
     let (text, result, is_error) = h
-        .tool("run_request", json!({ "request": "Users/Get user", "save_response_as": "Ada" }))
+        .tool(
+            "run_request",
+            json!({ "request": "Users/Get user", "save_response_as": "Ada" }),
+        )
         .await;
     assert!(!is_error, "{text}");
     assert_eq!(result["response"]["status"], 200);
     assert!(text.contains("\"name\": \"Ada\""), "{text}");
-    let (text, _, _) = h.tool("list_saved_responses", json!({ "request": "Get user" })).await;
+    let (text, _, _) = h
+        .tool("list_saved_responses", json!({ "request": "Get user" }))
+        .await;
     assert!(text.contains("Ada"), "{text}");
 
     let (text, _, _) = h.tool("list_environments", json!({})).await;
-    assert!(text.contains("userId = 42 (set by script, local)"), "{text}");
+    assert!(
+        text.contains("userId = 42 (set by script, local)"),
+        "{text}"
+    );
 
     let (text, _, is_error) = h
         .tool(
@@ -203,10 +242,15 @@ async fn agent_builds_and_runs_a_suite() {
     assert!(!is_error, "{text}");
     assert!(text.contains("→ 200 OK"), "{text}");
 
-    let (text, _, _) = h.tool("delete_request", json!({ "request": create_id })).await;
+    let (text, _, _) = h
+        .tool("delete_request", json!({ "request": create_id }))
+        .await;
     assert!(text.contains("Deleted"));
 
     // Files on disk are plain YAML a human can review in git.
     let yaml = std::fs::read_to_string(ws_dir.join("collections/users/get-user.req.yaml")).unwrap();
-    assert!(yaml.contains("url: '{{baseUrl}}/users/{{userId}}'"), "{yaml}");
+    assert!(
+        yaml.contains("url: '{{baseUrl}}/users/{{userId}}'"),
+        "{yaml}"
+    );
 }

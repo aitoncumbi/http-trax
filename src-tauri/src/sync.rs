@@ -66,7 +66,10 @@ pub fn start(app: AppHandle) {
 pub async fn run_pass(app: &AppHandle, entry: &WorkspaceEntry, fetch: bool) -> Option<SyncReport> {
     let state = app.state::<AppState>();
     {
-        let mut in_flight = state.sync_in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut in_flight = state
+            .sync_in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !in_flight.insert(entry.id.clone()) {
             return state
                 .sync_reports
@@ -82,7 +85,9 @@ pub async fn run_pass(app: &AppHandle, entry: &WorkspaceEntry, fetch: bool) -> O
         fetch,
         auto_pull: entry.sync.auto_pull,
     };
-    let result = tauri::async_runtime::spawn_blocking(move || sync_once(std::path::Path::new(&path), &opts)).await;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || sync_once(std::path::Path::new(&path), &opts))
+            .await;
     state
         .sync_in_flight
         .lock()

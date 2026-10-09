@@ -68,7 +68,10 @@ fn main() {
         let snippet = serde_json::json!({
             "mcpServers": { "http-trax": { "command": exe, "args": server_args } }
         });
-        println!("{}", serde_json::to_string_pretty(&snippet).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&snippet).unwrap_or_default()
+        );
         return;
     }
 

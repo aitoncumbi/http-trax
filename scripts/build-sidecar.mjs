@@ -21,9 +21,11 @@ function hostTriple() {
   return line.slice("host:".length).trim();
 }
 
-// Tauri exports the triple it is building for to before*Command hooks.
-const target = targetArg || process.env.TAURI_ENV_TARGET_TRIPLE || hostTriple();
-const explicitTarget = Boolean(targetArg || process.env.TAURI_ENV_TARGET_TRIPLE);
+// Tauri exports the triple it is building for to before*Command hooks. Only
+// pass --target when cross-compiling so native builds land in target/<profile>.
+const host = hostTriple();
+const target = targetArg || process.env.TAURI_ENV_TARGET_TRIPLE || host;
+const explicitTarget = target !== host;
 const profile = debug ? "debug" : "release";
 
 const cargoArgs = ["build", "-p", "trax-mcp", "--bin", "trax-mcp"];

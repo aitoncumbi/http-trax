@@ -24,7 +24,11 @@ pub struct AppInfo {
 fn find_mcp_binary() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let name = if cfg!(windows) { "trax-mcp.exe" } else { "trax-mcp" };
+    let name = if cfg!(windows) {
+        "trax-mcp.exe"
+    } else {
+        "trax-mcp"
+    };
     let candidates = [
         dir.join(name),
         // `tauri dev` runs from target/debug where cargo also puts trax-mcp.
@@ -111,7 +115,11 @@ pub async fn create_workspace(
 
 /// Register an existing workspace directory.
 #[tauri::command]
-pub async fn open_workspace(app: AppHandle, state: State<'_, AppState>, path: String) -> CmdResult<WorkspaceEntry> {
+pub async fn open_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> CmdResult<WorkspaceEntry> {
     let ws = Workspace::open(&path).map_err(|_| {
         format!("{path} is not an http-trax workspace (no trax.yaml). Create a new workspace there instead.")
     })?;
@@ -157,7 +165,11 @@ pub async fn clone_workspace(
 }
 
 #[tauri::command]
-pub async fn remove_workspace(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+pub async fn remove_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> CmdResult<()> {
     state.update_registry(|reg| reg.remove(&id).str_err())?;
     watch::refresh(&app);
     Ok(())
@@ -169,7 +181,11 @@ pub async fn set_active_workspace(state: State<'_, AppState>, id: String) -> Cmd
 }
 
 #[tauri::command]
-pub async fn update_workspace_prefs(state: State<'_, AppState>, id: String, prefs: WorkspacePrefs) -> CmdResult<()> {
+pub async fn update_workspace_prefs(
+    state: State<'_, AppState>,
+    id: String,
+    prefs: WorkspacePrefs,
+) -> CmdResult<()> {
     state.update_registry(|reg| {
         let entry = reg.get_mut(&id).ok_or("workspace not found")?;
         entry.prefs = prefs;
@@ -178,7 +194,11 @@ pub async fn update_workspace_prefs(state: State<'_, AppState>, id: String, pref
 }
 
 #[tauri::command]
-pub async fn update_sync_settings(state: State<'_, AppState>, id: String, sync: SyncSettings) -> CmdResult<()> {
+pub async fn update_sync_settings(
+    state: State<'_, AppState>,
+    id: String,
+    sync: SyncSettings,
+) -> CmdResult<()> {
     state.update_registry(|reg| {
         let entry = reg.get_mut(&id).ok_or("workspace not found")?;
         entry.sync = sync;
@@ -187,7 +207,11 @@ pub async fn update_sync_settings(state: State<'_, AppState>, id: String, sync: 
 }
 
 #[tauri::command]
-pub async fn update_manifest(state: State<'_, AppState>, id: String, manifest: WorkspaceManifest) -> CmdResult<()> {
+pub async fn update_manifest(
+    state: State<'_, AppState>,
+    id: String,
+    manifest: WorkspaceManifest,
+) -> CmdResult<()> {
     let ws = state.workspace(&id)?;
     let current = ws.manifest().str_err()?;
     if current.id != manifest.id {
@@ -208,8 +232,15 @@ pub async fn load_workspace(state: State<'_, AppState>, id: String) -> CmdResult
 }
 
 #[tauri::command]
-pub async fn create_collection(state: State<'_, AppState>, workspace_id: String, name: String) -> CmdResult<GroupNode> {
-    state.workspace(&workspace_id)?.create_collection(&name).str_err()
+pub async fn create_collection(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    name: String,
+) -> CmdResult<GroupNode> {
+    state
+        .workspace(&workspace_id)?
+        .create_collection(&name)
+        .str_err()
 }
 
 #[tauri::command]
@@ -219,22 +250,43 @@ pub async fn create_folder(
     parent_id: String,
     name: String,
 ) -> CmdResult<GroupNode> {
-    state.workspace(&workspace_id)?.create_folder(&parent_id, &name).str_err()
+    state
+        .workspace(&workspace_id)?
+        .create_folder(&parent_id, &name)
+        .str_err()
 }
 
 #[tauri::command]
-pub async fn get_group(state: State<'_, AppState>, workspace_id: String, id: String) -> CmdResult<GroupMeta> {
+pub async fn get_group(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+) -> CmdResult<GroupMeta> {
     state.workspace(&workspace_id)?.group(&id).str_err()
 }
 
 #[tauri::command]
-pub async fn update_group(state: State<'_, AppState>, workspace_id: String, meta: GroupMeta) -> CmdResult<()> {
-    state.workspace(&workspace_id)?.update_group(&meta).str_err()
+pub async fn update_group(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    meta: GroupMeta,
+) -> CmdResult<()> {
+    state
+        .workspace(&workspace_id)?
+        .update_group(&meta)
+        .str_err()
 }
 
 #[tauri::command]
-pub async fn delete_group(state: State<'_, AppState>, workspace_id: String, id: String) -> CmdResult<()> {
-    state.workspace(&workspace_id)?.delete_group(&id).str_err()?;
+pub async fn delete_group(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+) -> CmdResult<()> {
+    state
+        .workspace(&workspace_id)?
+        .delete_group(&id)
+        .str_err()?;
     // Drop bookmarks/scope pointing at a deleted collection.
     state.update_registry(|reg| {
         if let Some(entry) = reg.get_mut(&workspace_id) {
@@ -248,7 +300,11 @@ pub async fn delete_group(state: State<'_, AppState>, workspace_id: String, id: 
 }
 
 #[tauri::command]
-pub async fn get_request(state: State<'_, AppState>, workspace_id: String, id: String) -> CmdResult<Request> {
+pub async fn get_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+) -> CmdResult<Request> {
     state.workspace(&workspace_id)?.request(&id).str_err()
 }
 
@@ -259,22 +315,46 @@ pub async fn create_request(
     parent_id: String,
     request: Request,
 ) -> CmdResult<Request> {
-    state.workspace(&workspace_id)?.create_request(&parent_id, request).str_err()
+    state
+        .workspace(&workspace_id)?
+        .create_request(&parent_id, request)
+        .str_err()
 }
 
 #[tauri::command]
-pub async fn save_request(state: State<'_, AppState>, workspace_id: String, request: Request) -> CmdResult<()> {
-    state.workspace(&workspace_id)?.save_request(&request).str_err()
+pub async fn save_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    request: Request,
+) -> CmdResult<()> {
+    state
+        .workspace(&workspace_id)?
+        .save_request(&request)
+        .str_err()
 }
 
 #[tauri::command]
-pub async fn delete_request(state: State<'_, AppState>, workspace_id: String, id: String) -> CmdResult<()> {
-    state.workspace(&workspace_id)?.delete_request(&id).str_err()
+pub async fn delete_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+) -> CmdResult<()> {
+    state
+        .workspace(&workspace_id)?
+        .delete_request(&id)
+        .str_err()
 }
 
 #[tauri::command]
-pub async fn duplicate_request(state: State<'_, AppState>, workspace_id: String, id: String) -> CmdResult<Request> {
-    state.workspace(&workspace_id)?.duplicate_request(&id).str_err()
+pub async fn duplicate_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+) -> CmdResult<Request> {
+    state
+        .workspace(&workspace_id)?
+        .duplicate_request(&id)
+        .str_err()
 }
 
 #[tauri::command]
@@ -284,7 +364,10 @@ pub async fn move_request(
     id: String,
     parent_id: String,
 ) -> CmdResult<()> {
-    state.workspace(&workspace_id)?.move_request(&id, &parent_id).str_err()
+    state
+        .workspace(&workspace_id)?
+        .move_request(&id, &parent_id)
+        .str_err()
 }
 
 // ------------------------------------------------------------ environments
@@ -295,12 +378,22 @@ pub async fn save_environment(
     workspace_id: String,
     environment: Environment,
 ) -> CmdResult<Environment> {
-    state.workspace(&workspace_id)?.save_environment(&environment).str_err()
+    state
+        .workspace(&workspace_id)?
+        .save_environment(&environment)
+        .str_err()
 }
 
 #[tauri::command]
-pub async fn delete_environment(state: State<'_, AppState>, workspace_id: String, id: String) -> CmdResult<()> {
-    state.workspace(&workspace_id)?.delete_environment(&id).str_err()
+pub async fn delete_environment(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+) -> CmdResult<()> {
+    state
+        .workspace(&workspace_id)?
+        .delete_environment(&id)
+        .str_err()
 }
 
 /// Set (Some) or clear (None) a local override ("current value").
@@ -332,7 +425,10 @@ pub async fn set_environment_override(
 }
 
 #[tauri::command]
-pub async fn get_local_state(state: State<'_, AppState>, workspace_id: String) -> CmdResult<LocalState> {
+pub async fn get_local_state(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<LocalState> {
     let mut local = state.workspace(&workspace_id)?.local_state().str_err()?;
     // Secrets are shown merged into environments; don't send them twice.
     local.secrets.clear();
@@ -340,7 +436,10 @@ pub async fn get_local_state(state: State<'_, AppState>, workspace_id: String) -
 }
 
 #[tauri::command]
-pub async fn clear_runtime_variables(state: State<'_, AppState>, workspace_id: String) -> CmdResult<()> {
+pub async fn clear_runtime_variables(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<()> {
     state
         .workspace(&workspace_id)?
         .update_local_state(|s| s.runtime_variables.clear())
@@ -362,7 +461,9 @@ pub async fn send_request(
         environment: environment_id,
         ..Default::default()
     };
-    run_draft(&ws, &request, parent_id.as_deref(), &opts).await.str_err()
+    run_draft(&ws, &request, parent_id.as_deref(), &opts)
+        .await
+        .str_err()
 }
 
 #[derive(Debug, Serialize)]
@@ -385,7 +486,9 @@ pub async fn run_collection(
         environment: environment_id,
         ..Default::default()
     };
-    let (report, results) = run_group(&ws, &group_id, &opts, stop_on_failure).await.str_err()?;
+    let (report, results) = run_group(&ws, &group_id, &opts, stop_on_failure)
+        .await
+        .str_err()?;
     Ok(CollectionRun { report, results })
 }
 
@@ -397,7 +500,10 @@ pub async fn list_saved_responses(
     workspace_id: String,
     request_id: String,
 ) -> CmdResult<Vec<SavedResponse>> {
-    state.workspace(&workspace_id)?.saved_responses(&request_id).str_err()
+    state
+        .workspace(&workspace_id)?
+        .saved_responses(&request_id)
+        .str_err()
 }
 
 #[tauri::command]

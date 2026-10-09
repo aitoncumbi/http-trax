@@ -22,7 +22,8 @@ use tokio::sync::mpsc;
 pub use tools::tool_definitions;
 
 pub const SERVER_NAME: &str = "http-trax";
-pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "\
 http-trax is a git-backed API client (like Postman). Collections, requests and environments \
@@ -134,7 +135,10 @@ impl Server {
 
     async fn call_tool(&self, params: &Value) -> Value {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-        let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let _guard = self.tool_lock.lock().await;
         match tools::call(self, name, &args).await {
             Ok(out) => {

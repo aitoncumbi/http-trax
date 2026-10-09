@@ -247,7 +247,9 @@ impl Git {
     }
 
     pub fn toplevel(&self) -> Result<PathBuf> {
-        Ok(PathBuf::from(self.git(&["rev-parse", "--show-toplevel"])?.trim()))
+        Ok(PathBuf::from(
+            self.git(&["rev-parse", "--show-toplevel"])?.trim(),
+        ))
     }
 
     pub fn prefix(&self) -> Result<String> {
@@ -318,7 +320,13 @@ impl Git {
         if self.rev("HEAD").is_some() {
             args.extend(["reset".into(), "-q".into(), "HEAD".into(), "--".into()]);
         } else {
-            args.extend(["rm".into(), "--cached".into(), "-r".into(), "-q".into(), "--".into()]);
+            args.extend([
+                "rm".into(),
+                "--cached".into(),
+                "-r".into(),
+                "-q".into(),
+                "--".into(),
+            ]);
         }
         if paths.is_empty() {
             args.push(".".into());
@@ -346,7 +354,11 @@ impl Git {
                 .map_err(|e| GitError::Io(e.to_string()))?;
             } else if file.index == 'A' {
                 let root_s = root.to_string_lossy().into_owned();
-                run_git(&self.dir, &["-C", &root_s, "rm", "-f", "-q", "--", path], &self.opts(LOCAL))?;
+                run_git(
+                    &self.dir,
+                    &["-C", &root_s, "rm", "-f", "-q", "--", path],
+                    &self.opts(LOCAL),
+                )?;
             } else {
                 let root_s = root.to_string_lossy().into_owned();
                 run_git(
@@ -460,10 +472,7 @@ impl Git {
 
     /// Switch to a local branch, or create a tracking branch for `origin/x`.
     pub fn checkout(&self, name: &str) -> Result<()> {
-        let is_remote = self
-            .branches()?
-            .iter()
-            .any(|b| b.remote && b.name == name);
+        let is_remote = self.branches()?.iter().any(|b| b.remote && b.name == name);
         if is_remote {
             let local = name.split_once('/').map(|(_, b)| b).unwrap_or(name);
             if self.rev(&format!("refs/heads/{local}")).is_some() {
@@ -475,7 +484,8 @@ impl Git {
     }
 
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        self.git(&["branch", if force { "-D" } else { "-d" }, name]).map(|_| ())
+        self.git(&["branch", if force { "-D" } else { "-d" }, name])
+            .map(|_| ())
     }
 
     /// Merge `branch` into the current branch.
@@ -490,11 +500,22 @@ impl Git {
         self.outcome(before, result, false)
     }
 
-    fn outcome(&self, before: Option<String>, result: Result<String>, rebase: bool) -> Result<MergeOutcome> {
+    fn outcome(
+        &self,
+        before: Option<String>,
+        result: Result<String>,
+        rebase: bool,
+    ) -> Result<MergeOutcome> {
         if let Err(e) = result {
             let conflicted: Vec<String> = self
                 .status()
-                .map(|s| s.files.into_iter().filter(|f| f.conflicted).map(|f| f.path).collect())
+                .map(|s| {
+                    s.files
+                        .into_iter()
+                        .filter(|f| f.conflicted)
+                        .map(|f| f.path)
+                        .collect()
+                })
                 .unwrap_or_default();
             if !conflicted.is_empty() {
                 return Ok(MergeOutcome::Conflicts { files: conflicted });
@@ -557,9 +578,18 @@ impl Git {
             Resolution::Resolved => None,
         };
         if let Some(side) = side {
-            run_git(&self.dir, &["-C", &root, "checkout", side, "--", path], &self.opts(LOCAL))?;
+            run_git(
+                &self.dir,
+                &["-C", &root, "checkout", side, "--", path],
+                &self.opts(LOCAL),
+            )?;
         }
-        run_git(&self.dir, &["-C", &root, "add", "--", path], &self.opts(LOCAL)).map(|_| ())
+        run_git(
+            &self.dir,
+            &["-C", &root, "add", "--", path],
+            &self.opts(LOCAL),
+        )
+        .map(|_| ())
     }
 
     /// Commit history. `path` limits it to commits touching that path.
@@ -593,14 +623,24 @@ impl Git {
             args.extend(["--", p]);
         }
         let mut diff = run_git(&self.dir, &args, &self.opts(LOCAL))?.stdout;
-        // Untracked files have no diff; show them as additions.
+        // Untracked files have no diff; show them as additions. git treats
+        // "/dev/null" as the null device on every platform, Windows included.
         if !staged {
             if let Some(p) = path {
                 let status = self.status()?;
                 if status.files.iter().any(|f| f.path == p && f.untracked) {
                     let out = run_git(
                         &self.dir,
-                        &["-C", &root, "diff", "--no-color", "--no-index", "--", null_device(), p],
+                        &[
+                            "-C",
+                            &root,
+                            "diff",
+                            "--no-color",
+                            "--no-index",
+                            "--",
+                            "/dev/null",
+                            p,
+                        ],
                         &self.opts(LOCAL).allow_exit(1),
                     )?;
                     diff.push_str(&out.stdout);
@@ -623,7 +663,9 @@ impl Git {
             .ok()
             .map(|s| s.trim().to_string());
         let counts = self.git(&["rev-list", "--left-right", "--count", &range])?;
-        let mut it = counts.split_whitespace().map(|n| n.parse::<u32>().unwrap_or(0));
+        let mut it = counts
+            .split_whitespace()
+            .map(|n| n.parse::<u32>().unwrap_or(0));
         let behind = it.next().unwrap_or(0);
         let ahead = it.next().unwrap_or(0);
         let commits = self.log(Some(&format!("{base}..{head}")), 200, None)?;
@@ -649,13 +691,25 @@ impl Git {
     fn merge_conflicts(&self, base: &str, head: &str) -> Option<Vec<String>> {
         let out = run_git(
             &self.dir,
-            &["merge-tree", "--write-tree", "--name-only", "--no-messages", base, head],
+            &[
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "--no-messages",
+                base,
+                head,
+            ],
             &self.opts(LOCAL).allow_exit(1),
         )
         .ok()?;
         let mut lines = out.stdout.lines();
         lines.next()?; // tree id
-        Some(lines.filter(|l| !l.is_empty()).map(str::to_string).collect())
+        Some(
+            lines
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )
     }
 
     pub fn remotes(&self) -> Result<Vec<Remote>> {
@@ -691,10 +745,14 @@ impl Git {
 
     pub fn identity(&self) -> Result<Identity> {
         let get = |key: &str| {
-            run_git(&self.dir, &["config", "--get", key], &self.opts(LOCAL).allow_exit(1))
-                .ok()
-                .map(|o| o.stdout.trim().to_string())
-                .filter(|s| !s.is_empty())
+            run_git(
+                &self.dir,
+                &["config", "--get", key],
+                &self.opts(LOCAL).allow_exit(1),
+            )
+            .ok()
+            .map(|o| o.stdout.trim().to_string())
+            .filter(|s| !s.is_empty())
         };
         Ok(Identity {
             name: get("user.name"),
@@ -719,21 +777,17 @@ impl Git {
             .find(|r| r.name == remote)
             .map(|r| r.url)
             .unwrap_or_default();
-        let strip = |b: &str| b.strip_prefix(&format!("{remote}/")).unwrap_or(b).to_string();
+        let strip = |b: &str| {
+            b.strip_prefix(&format!("{remote}/"))
+                .unwrap_or(b)
+                .to_string()
+        };
         Ok(compare_url(&url, &strip(base), &strip(head)))
     }
 }
 
 fn as_strs(v: &[String]) -> Vec<&str> {
     v.iter().map(String::as_str).collect()
-}
-
-fn null_device() -> &'static str {
-    if cfg!(windows) {
-        "NUL"
-    } else {
-        "/dev/null"
-    }
 }
 
 #[cfg(test)]
