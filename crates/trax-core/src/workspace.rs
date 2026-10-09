@@ -233,10 +233,14 @@ impl Workspace {
                 }
             }
         }
-        folders.sort_by_key(|f| sort_key(f.meta.seq, &f.meta.name));
-        requests.sort_by_key(|r| sort_key(r.seq, &r.name));
+        // Folders and requests share one ordering (`seq`), so the order the
+        // user arranges is also the order a collection run uses.
         let mut items: Vec<TreeItem> = folders.into_iter().map(TreeItem::Folder).collect();
         items.extend(requests.into_iter().map(TreeItem::Request));
+        items.sort_by_key(|item| match item {
+            TreeItem::Folder(f) => sort_key(f.meta.seq, &f.meta.name),
+            TreeItem::Request(r) => sort_key(r.seq, &r.name),
+        });
         Some(GroupNode {
             meta,
             dir: rel(&self.root, dir),
@@ -776,7 +780,7 @@ mod tests {
         let col = &tree.collections[0];
         assert_eq!(col.dir, "collections/users-api");
         assert_eq!(col.requests().len(), 2);
-        // Folders are listed before requests.
+        // Items keep creation order (folder first here).
         assert!(matches!(col.items[0], TreeItem::Folder(_)));
 
         let ctx = ws.request_context(&del.id).unwrap();
