@@ -1,9 +1,9 @@
 "use client";
 
-import { FileText, GitCompare, GitPullRequest, Play, Settings2, SlidersHorizontal, X } from "lucide-react";
+import { FileText, GitCompare, GitPullRequest, Play, Plus, Settings2, SlidersHorizontal, X } from "lucide-react";
 
 import { tabDirty, useStore, useWorkspaceTabs, type Tab } from "@/lib/store";
-import { cx, methodColor } from "@/lib/util";
+import { cx } from "@/lib/util";
 
 import { useContextMenu } from "../ui/Menu";
 import { DiffView } from "./DiffView";
@@ -14,30 +14,35 @@ import { ReviewView } from "./ReviewView";
 import { RunnerView } from "./RunnerView";
 import { Welcome } from "./Welcome";
 
-function tabTitle(tab: Tab): { icon: React.ReactNode; title: string } {
+function RequestIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 5.5h9.5M10 3l2.5 2.5L10 8M13 10.5H3.5M6 8l-2.5 2.5L6 13" />
+    </svg>
+  );
+}
+
+function tabTitle(tab: Tab): { icon: React.ReactNode; title: string; hint: string } {
   switch (tab.kind) {
     case "request":
-      return {
-        icon: <span className={cx("font-mono text-[10px] font-bold", methodColor(tab.draft.method))}>{tab.draft.method}</span>,
-        title: tab.draft.name || "Untitled",
-      };
+      return { icon: <RequestIcon />, title: tab.draft.name || "Untitled", hint: `${tab.draft.method} ${tab.draft.url}` };
     case "group":
-      return { icon: <Settings2 size={13} className="text-muted" />, title: tab.draft.name };
+      return { icon: <Settings2 size={15} strokeWidth={1.4} />, title: tab.draft.name, hint: "Collection settings" };
     case "environment":
-      return { icon: <SlidersHorizontal size={13} className="text-muted" />, title: tab.draft.name };
+      return { icon: <SlidersHorizontal size={15} strokeWidth={1.4} />, title: tab.draft.name, hint: "Environment" };
     case "runner":
-      return { icon: <Play size={13} className="text-accent" />, title: `Run: ${tab.groupName}` };
+      return { icon: <Play size={15} strokeWidth={1.4} />, title: `Run ${tab.groupName}`, hint: "Collection run" };
     case "review":
-      return { icon: <GitPullRequest size={13} className="text-info" />, title: `${tab.head} → ${tab.base}` };
+      return { icon: <GitPullRequest size={15} strokeWidth={1.4} />, title: `${tab.head} → ${tab.base}`, hint: "Review" };
     case "diff":
-      return { icon: <GitCompare size={13} className="text-muted" />, title: tab.title };
+      return { icon: <GitCompare size={15} strokeWidth={1.4} />, title: tab.title, hint: tab.title };
   }
 }
 
 function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
   const { focusTab, closeTab } = useStore.getState();
   const dirty = tabDirty(tab);
-  const { icon, title } = tabTitle(tab);
+  const { icon, title, hint } = tabTitle(tab);
   const ctx = useContextMenu(() => [
     { label: "Close", hint: "Ctrl+W", onSelect: () => void closeTab(tab.id) },
     {
@@ -53,34 +58,34 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
     <div
       role="tab"
       aria-selected={active}
+      title={hint}
       onMouseDown={(e) => e.button === 1 && (e.preventDefault(), void closeTab(tab.id))}
       onContextMenu={ctx.open}
-      className={cx(
-        "group relative flex h-9 max-w-[220px] min-w-[120px] shrink-0 cursor-pointer items-center gap-2 border-r border-border pr-1.5 pl-3",
-        active ? "bg-bg text-text" : "bg-panel text-muted hover:text-text",
-      )}
       onClick={() => focusTab(tab.id)}
+      className={cx(
+        "group -mb-px flex max-w-[240px] shrink-0 cursor-pointer items-center gap-2 border-b-2 pr-1.5 pl-3 text-[14px]",
+        active ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
+      )}
     >
-      {active && <span className="absolute inset-x-0 top-0 h-0.5 bg-accent" />}
-      <span className="shrink-0">{icon}</span>
-      <span className="flex-1 truncate text-[12.5px]">{title}</span>
-      <button
-        aria-label="Close tab"
-        onClick={(e) => {
-          e.stopPropagation();
-          void closeTab(tab.id);
-        }}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-hover"
-      >
-        {dirty ? (
-          <>
-            <span className="h-2 w-2 rounded-full bg-text group-hover:hidden" />
-            <X size={13} className="hidden group-hover:block" />
-          </>
-        ) : (
-          <X size={13} className={cx(!active && "opacity-0 group-hover:opacity-100")} />
-        )}
-      </button>
+      <span className={cx("shrink-0", tab.kind === "runner" && "text-accent-text", tab.kind === "review" && "text-info")}>{icon}</span>
+      <span className="truncate">{title}</span>
+      <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
+        {dirty && <span className="h-[7px] w-[7px] rounded-full bg-accent-line group-hover:hidden" aria-label="Unsaved changes" />}
+        <button
+          type="button"
+          aria-label={`Close ${title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void closeTab(tab.id);
+          }}
+          className={cx(
+            "absolute inset-0 hidden items-center justify-center rounded text-faint hover:bg-hover hover:text-text group-hover:flex",
+            !dirty && active && "flex",
+          )}
+        >
+          <X size={13} strokeWidth={1.6} />
+        </button>
+      </span>
       {ctx.menu}
     </div>
   );
@@ -88,13 +93,17 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
 
 export function MainArea() {
   const { tabs, active } = useWorkspaceTabs();
+  const newRequestHere = useStore((s) => s.newRequestHere);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {tabs.length > 0 && (
-        <div className="flex h-9 shrink-0 overflow-x-auto border-b border-border bg-panel" role="tablist">
+        <div role="tablist" aria-label="Open tabs" className="flex h-9 shrink-0 items-stretch gap-0.5 overflow-x-auto border-b border-border px-1.5">
           {tabs.map((t) => (
             <TabButton key={t.id} tab={t} active={t.id === active?.id} />
           ))}
+          <button type="button" aria-label="New request" title="New request (Ctrl+N)" onClick={() => void newRequestHere()} className="icon-btn shrink-0 self-center">
+            <Plus size={15} strokeWidth={1.6} />
+          </button>
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col">
@@ -106,8 +115,8 @@ export function MainArea() {
         {active?.kind === "review" && <ReviewView key={active.id} tab={active} />}
         {active?.kind === "diff" && (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex items-center gap-2 border-b border-border px-4 py-2 text-[12.5px] text-muted">
-              <FileText size={14} /> {active.title}
+            <div className="flex h-10 items-center gap-2 border-b border-border px-4 text-[13px] text-muted">
+              <FileText size={14} strokeWidth={1.4} /> {active.title}
             </div>
             <DiffView key={active.id} diff={active.text} />
           </div>

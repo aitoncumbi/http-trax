@@ -4,6 +4,8 @@ A desktop API client in the spirit of Postman, built around git. Your collection
 
 Built with Rust and Tauri 2 (backend and desktop shell) and Next.js (UI). Runs on Linux and Windows.
 
+The app's interface carries the name **Courion**. The project, installers, binaries (`http-trax`, `trax-mcp`) and the `trax.*` script API keep the http-trax name for now.
+
 ![Request editor](docs/screenshots/request.png)
 
 ## Features
@@ -14,6 +16,8 @@ Built with Rust and Tauri 2 (backend and desktop shell) and Next.js (UI). Runs o
 - **Always online.** A background worker fetches every workspace and fast-forwards when it's safe (no local commits, no uncommitted edits), so teammates' changes simply appear. It never merges or touches your work.
 - **Scripts.** JavaScript pre-request and post-response scripts at request, folder and collection level, with tests and assertions (`trax.test`, `trax.expect`), variable chaining, and a Postman-compatible `pm.*` subset. Scripts run in a sandbox with no file or network access.
 - **Saved responses.** Keep known-good responses as examples on a request. They're committed with the workspace.
+- **Readable reviews.** Source control shows what changed in a request or environment ("URL changed", "Header added", "Test added") instead of raw YAML, with the line diff one click away.
+- **Fast to drive from the keyboard.** Ctrl+K searches every request and command, Ctrl+N creates a request, and a pasted cURL command becomes a request. Recent runs are listed under History.
 - **Environments done right for git.** Shared values are committed; secrets and values your scripts set (like fresh tokens) stay on your machine.
 - **MCP server for AI agents.** `trax-mcp` ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git.
 

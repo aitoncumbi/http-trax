@@ -8,7 +8,9 @@ import type {
   Environment,
   EnvironmentView,
   GroupMeta,
+  FileChanges,
   GroupNode,
+  HistoryEntry,
   RepoStatus,
   Request,
   RunResult,
@@ -31,6 +33,7 @@ interface MockWorkspace {
   environments: EnvironmentView[];
   saved: Record<string, SavedResponse[]>;
   runtime: Record<string, string>;
+  history: HistoryEntry[];
 }
 
 const uid = () =>
@@ -60,116 +63,121 @@ const r = (request: Request): MockItem => ({ kind: "request", request });
 const f = (g: MockGroup): MockItem => ({ kind: "folder", group: g });
 
 function seed(): MockWorkspace[] {
-  const orders = group(
-    "Orders API",
-    [
-      r(
-        req("List orders", "GET", "{{baseUrl}}/v1/orders", {
-          params: [kv("status", "open"), { key: "limit", value: "20", enabled: false }],
-          scripts: {
-            postResponse:
-              "trax.test(\"status is 200\", () => {\n  trax.expect(trax.response.status).toBe(200);\n});\n\ntrax.test(\"returns a list\", () => {\n  trax.expect(trax.response.json().items).toBeTypeOf(\"array\");\n});\n",
-          },
-        }),
-      ),
-      r(
-        req("Create order", "POST", "{{baseUrl}}/v1/orders", {
-          headers: [kv("Idempotency-Key", "{{$uuid}}")],
-          body: {
-            mode: "json",
-            text: '{\n  "customerId": "{{customerId}}",\n  "items": [\n    { "sku": "TRX-001", "quantity": 2 }\n  ],\n  "currency": "EUR"\n}',
-          },
-          scripts: {
-            postResponse:
-              "trax.test(\"order created\", () => {\n  trax.expect(trax.response.status).toBe(201);\n});\n\n// Chain the next request\ntrax.env.set(\"orderId\", trax.response.json().id);\n",
-          },
-        }),
-      ),
-      r(req("Get order", "GET", "{{baseUrl}}/v1/orders/{{orderId}}")),
-      f(
-        group("Admin", [
-          r(req("Refund order", "POST", "{{baseUrl}}/v1/orders/{{orderId}}/refund", { body: { mode: "json", text: '{\n  "reason": "requested_by_customer"\n}' } })),
-          r(req("Delete order", "DELETE", "{{baseUrl}}/v1/orders/{{orderId}}")),
-        ]),
-      ),
-    ],
-    {
-      variables: [{ key: "apiVersion", value: "v1", enabled: true }],
-      headers: [kv("Accept", "application/json")],
-      auth: { type: "bearer", token: "{{token}}" },
-      scripts: { preRequest: "// Runs before every request in this collection\ntrax.request.headers.set(\"X-Request-Id\", trax.uuid());\n" },
-    },
-  );
+  const ordersFolder = group("Orders", [
+    r(
+      req("List orders", "GET", "{{baseUrl}}/v1/orders", {
+        description:
+          "Returns a page of orders, newest first. Filter with `status` and page with `limit`. The post-response script saves the first order id as `orderId` for the next request.",
+        params: [
+          { key: "status", value: "pending", enabled: true, description: "Filter by status" },
+          { key: "limit", value: "20", enabled: true, description: "Page size" },
+          { key: "expand", value: "customer", enabled: false, description: "Embed customer object" },
+        ],
+        headers: [kv("Accept", "application/json"), { key: "X-Request-Id", value: "{{$uuid}}", enabled: true, description: "New value per send" }],
+        scripts: {
+          postResponse:
+            'trax.test("returns orders", () => {\n  trax.expect(trax.response.status).toBe(200);\n});\n\n// Chain the next request\ntrax.env.set("orderId", trax.response.json().data[0].id);\n',
+        },
+      }),
+    ),
+    r(
+      req("Create order", "POST", "{{baseUrl}}/v1/orders", {
+        headers: [kv("Idempotency-Key", "{{$uuid}}")],
+        body: {
+          mode: "json",
+          text: '{\n  "customerId": "{{customerId}}",\n  "items": [\n    { "sku": "TRX-001", "quantity": 2 }\n  ],\n  "currency": "EUR"\n}',
+        },
+        scripts: {
+          postResponse:
+            'trax.test("status is 201", () => {\n  trax.expect(trax.response.status).toBe(201);\n});\n\ntrax.env.set("orderId", trax.response.json().id);\n',
+        },
+      }),
+    ),
+    r(req("Get order", "GET", "{{baseUrl}}/v1/orders/{{orderId}}")),
+    r(req("Cancel order", "DELETE", "{{baseUrl}}/v1/orders/{{orderId}}")),
+  ]);
+  const admin = group("Admin", [
+    r(req("Refund order", "POST", "{{baseUrl}}/v1/orders/{{orderId}}/refund", { body: { mode: "json", text: '{\n  "amount": 2400,\n  "reason": "duplicate"\n}' } })),
+    r(req("Export orders", "GET", "{{baseUrl}}/v1/admin/orders/export")),
+    r(req("Purge test data", "DELETE", "{{baseUrl}}/v1/admin/test-data")),
+  ]);
+  const orders = group("Orders API", [f(ordersFolder), f(admin)], {
+    variables: [{ key: "apiVersion", value: "v1", enabled: true }],
+    auth: { type: "bearer", token: "{{apiToken}}" },
+  });
   const customers = group("Customers API", [
     r(req("Search customers", "GET", "{{baseUrl}}/v1/customers", { params: [kv("q", "ada")] })),
     r(req("Create customer", "POST", "{{baseUrl}}/v1/customers", { body: { mode: "json", text: '{\n  "name": "Ada Lovelace",\n  "email": "ada@example.com"\n}' } })),
   ]);
   const auth = group("Auth", [
     r(
-      req("Login", "POST", "{{authUrl}}/oauth/token", {
+      req("Issue access token", "POST", "{{authUrl}}/oauth/token", {
         body: { mode: "form-urlencoded", fields: [kv("grant_type", "client_credentials"), kv("client_id", "{{clientId}}"), kv("client_secret", "{{clientSecret}}")] },
-        scripts: { postResponse: "trax.env.set(\"token\", trax.response.json().access_token);\n" },
+        scripts: { postResponse: 'trax.env.set("apiToken", trax.response.json().access_token);\n' },
       }),
     ),
   ]);
   const webhooks = group("Webhooks", [r(req("Stripe webhook", "POST", "{{baseUrl}}/webhooks/stripe"))]);
   [orders, customers, auth, webhooks].forEach((c, i) => (c.meta.seq = i + 1));
 
-  const local: EnvironmentView = {
+  const env = (name: string, vars: [string, string, boolean?][], overrides: Record<string, string> = {}): EnvironmentView => ({
     id: uid(),
-    name: "Local",
-    variables: [
-      { key: "baseUrl", value: "http://localhost:8080", enabled: true },
-      { key: "authUrl", value: "http://localhost:9000", enabled: true },
-      { key: "clientId", value: "payments-dev", enabled: true },
-      { key: "clientSecret", value: "dev-secret", enabled: true, secret: true },
-    ],
-    overrides: { token: "eyJhbGciOi…", orderId: "ord_42" },
+    name,
+    variables: vars.map(([key, value, secret]) => ({ key, value, enabled: true, secret: !!secret })),
+    overrides,
+  });
+  const local = env("Local", [["baseUrl", "http://localhost:8080"], ["customerId", "cus_204"], ["apiToken", "dev-token", true]], { orderId: "ord_841" });
+  const staging = env("Staging", [["baseUrl", "https://api.staging.acme.dev"], ["customerId", "cus_9fA3kL2"], ["apiToken", "stg-token", true]]);
+  const production = env("Production", [["baseUrl", "https://api.acme.dev"], ["customerId", "cus_1a77b0"], ["apiToken", "prod-token", true]]);
+
+  const mk = (name: string, team: string | null, path: string, collections: MockGroup[], environments: EnvironmentView[]): MockWorkspace => {
+    const id = uid();
+    return {
+      entry: {
+        id,
+        name,
+        path,
+        team,
+        sync: { enabled: true, intervalSecs: 60, autoPull: true, remote: "origin" },
+        prefs: { bookmarks: [], scopedCollection: null, activeEnvironment: environments[0]?.id ?? null },
+      },
+      manifest: { version: 1, id, name, team: team ?? undefined },
+      collections,
+      environments,
+      saved: {},
+      runtime: {},
+      history: [],
+    };
   };
-  const staging: EnvironmentView = {
+  const payments = mk("Payments", "Payments Team", "/home/dev/payments-service/api-tests", [orders, customers, auth, webhooks], [local, staging, production]);
+  payments.entry.prefs.bookmarks = [orders.meta.id];
+  payments.runtime = { traceId: "t-91c2" };
+  const day = 86_400_000;
+  const h = (name: string, method: string, status: number, ago: number): HistoryEntry => ({
     id: uid(),
-    name: "Staging",
-    variables: [
-      { key: "baseUrl", value: "https://staging.payments.example.com", enabled: true },
-      { key: "authUrl", value: "https://auth.staging.example.com", enabled: true },
-    ],
-    overrides: {},
-  };
+    name,
+    method,
+    url: "http://localhost:8080/v1/orders",
+    status,
+    timeMs: 30 + Math.round(Math.random() * 90),
+    ok: status < 400,
+    testsPassed: status < 400 ? 1 : 0,
+    testsFailed: status < 400 ? 0 : 1,
+    environment: "Local",
+    at: new Date(Date.now() - ago).toISOString(),
+  });
+  payments.history = [
+    h("List orders", "GET", 200, 4 * 60_000),
+    h("Create order", "POST", 201, 9 * 60_000),
+    h("Get order", "GET", 404, 26 * 60_000),
+    h("Cancel order", "DELETE", 204, 50 * 60_000),
+    h("Issue access token", "POST", 200, day + 3_600_000),
+  ];
 
-  const payments: MockWorkspace = {
-    entry: {
-      id: uid(),
-      name: "Payments",
-      path: "/home/dev/payments-service/api-tests",
-      team: "Payments Team",
-      sync: { enabled: true, intervalSecs: 60, autoPull: true, remote: "origin" },
-      prefs: { bookmarks: [orders.meta.id], scopedCollection: null, activeEnvironment: local.id },
-    },
-    manifest: { version: 1, id: "", name: "Payments", team: "Payments Team" },
-    collections: [orders, customers, auth, webhooks],
-    environments: [local, staging],
-    saved: {},
-    runtime: { traceId: "t-91c2" },
-  };
-  payments.manifest.id = payments.entry.id;
-
-  const platform: MockWorkspace = {
-    entry: {
-      id: uid(),
-      name: "Platform",
-      path: "/home/dev/platform/collections",
-      team: "Platform",
-      sync: { enabled: true, intervalSecs: 60, autoPull: true, remote: "origin" },
-      prefs: { bookmarks: [], scopedCollection: null, activeEnvironment: null },
-    },
-    manifest: { version: 1, id: "", name: "Platform", team: "Platform" },
-    collections: [group("Feature flags", [r(req("List flags", "GET", "{{baseUrl}}/flags"))], { seq: 1 })],
-    environments: [],
-    saved: {},
-    runtime: {},
-  };
-  platform.manifest.id = platform.entry.id;
-  return [payments, platform];
+  const ledger = mk("Ledger Sync Squad", "Ledger Sync Squad", "/home/dev/ledger/collections", [group("Ledger API", [r(req("List entries", "GET", "{{baseUrl}}/entries"))], { seq: 1 })], []);
+  const northwind = mk("Northwind (client)", "Northwind", "/home/dev/clients/northwind", [group("Northwind API", [r(req("Health", "GET", "{{baseUrl}}/health"))], { seq: 1 })], []);
+  const personal = mk("Personal", null, "/home/dev/scratch", [], []);
+  return [payments, ledger, northwind, personal];
 }
 
 const db = {
@@ -320,23 +328,57 @@ const now = () => Math.floor(Date.now() / 1000);
 const gitState = {
   branch: "feature/refunds",
   files: [
-    { path: "api-tests/collections/orders-api/create-order.req.yaml", index: ".", worktree: "M", staged: false, unstaged: true, untracked: false, conflicted: false, inWorkspace: true },
-    { path: "api-tests/collections/orders-api/admin/refund-order.req.yaml", index: "?", worktree: "?", staged: false, unstaged: true, untracked: true, conflicted: false, inWorkspace: true },
     { path: "api-tests/environments/local.env.yaml", index: "M", worktree: ".", staged: true, unstaged: false, untracked: false, conflicted: false, inWorkspace: true },
+    { path: "api-tests/collections/orders-api/orders/create-order.req.yaml", index: ".", worktree: "M", staged: false, unstaged: true, untracked: false, conflicted: false, inWorkspace: true },
+    { path: "api-tests/collections/orders-api/orders/refund-order.req.yaml", index: "?", worktree: "?", staged: false, unstaged: true, untracked: true, conflicted: false, inWorkspace: true },
   ],
   commits: [
     { subject: "Add refund flow requests", author: "Ada Lovelace", ago: 3600 },
     { subject: "Assert idempotency on create order", author: "Grace Hopper", ago: 7200 },
-    { subject: "Merge branch 'feature/customers' into main", author: "Linus T.", ago: 86400, merge: true },
-    { subject: "Add customers collection", author: "Ada Lovelace", ago: 90000 },
-    { subject: "Initial workspace", author: "Ada Lovelace", ago: 200000 },
+    { subject: "Rename Orders folder", author: "Ada Lovelace", ago: 18000 },
+    { subject: "Merge 'feature/customers' into main", author: "Linus T.", ago: 86400, merge: true },
+    { subject: "Add customers API collection", author: "Linus T.", ago: 172800 },
+    { subject: "Initial import from Postman", author: "Ada Lovelace", ago: 432000 },
   ],
 };
 
-const SAMPLE_DIFF = `diff --git a/api-tests/collections/orders-api/create-order.req.yaml b/api-tests/collections/orders-api/create-order.req.yaml
+const FILE_CHANGES: Record<string, Omit<FileChanges, "path" | "diff">> = {
+  "local.env.yaml": {
+    kind: "environment",
+    additions: 2,
+    deletions: 2,
+    changes: [
+      { kind: "added", label: "Variable added", subject: "apiToken", area: "Variable", after: "secret · not synced" },
+      { kind: "updated", label: "Variable updated", subject: "baseUrl", area: "Variable", before: "http://localhost:3000", after: "http://localhost:8080" },
+      { kind: "removed", label: "Variable removed", subject: "debug", area: "Variable", before: "true" },
+    ],
+  },
+  "create-order.req.yaml": {
+    kind: "request",
+    additions: 6,
+    deletions: 2,
+    changes: [
+      { kind: "updated", label: "URL changed", subject: "POST", area: "Request", before: "{{baseUrl}}/v1/orders", after: "{{baseUrl}}/v2/orders" },
+      { kind: "added", label: "Header added", subject: "Idempotency-Key", area: "Headers", after: "{{$uuid}}" },
+      { kind: "updated", label: "Body updated", subject: "currency", area: "Body", before: '"USD"', after: '"EUR"' },
+      { kind: "added", label: "Test added", subject: "status is 201", area: "Scripts", after: "trax.expect(trax.response.status).toBe(201)" },
+    ],
+  },
+  "refund-order.req.yaml": {
+    kind: "request",
+    additions: 9,
+    deletions: 0,
+    changes: [
+      { kind: "added", label: "Request added", subject: "POST {{baseUrl}}/v1/orders/{{orderId}}/refund", area: "Request" },
+      { kind: "added", label: "Body added", subject: "json", area: "Body", after: '{"amount":2400,"reason":"duplicate"}' },
+    ],
+  },
+};
+
+const SAMPLE_DIFF = `diff --git a/api-tests/collections/orders-api/orders/create-order.req.yaml b/api-tests/collections/orders-api/orders/create-order.req.yaml
 index 3b18e51..a9c4f2d 100644
---- a/api-tests/collections/orders-api/create-order.req.yaml
-+++ b/api-tests/collections/orders-api/create-order.req.yaml
+--- a/api-tests/collections/orders-api/orders/create-order.req.yaml
++++ b/api-tests/collections/orders-api/orders/create-order.req.yaml
 @@ -4,10 +4,13 @@ seq: 2
  method: POST
  url: '{{baseUrl}}/v1/orders'
@@ -377,6 +419,23 @@ function syncReport(w: MockWorkspace): SyncReport {
   };
 }
 
+function recordHistory(w: MockWorkspace, run: RunResult, envId: string | null) {
+  w.history.unshift({
+    id: uid(),
+    requestId: run.requestId,
+    name: run.requestName,
+    method: run.request.method,
+    url: run.request.url,
+    status: run.response?.status ?? null,
+    timeMs: run.response?.timeMs ?? null,
+    ok: !run.error && run.tests.every((t) => t.passed),
+    testsPassed: run.tests.filter((t) => t.passed).length,
+    testsFailed: run.tests.filter((t) => !t.passed).length,
+    environment: w.environments.find((e) => e.id === envId)?.name ?? null,
+    at: run.startedAt,
+  });
+}
+
 type Args = Record<string, unknown>;
 const s = (a: Args, k: string) => a[k] as string;
 
@@ -401,6 +460,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
       environments: [],
       saved: {},
       runtime: {},
+      history: [],
     };
     db.workspaces.push(w);
     db.active = id;
@@ -529,7 +589,9 @@ const handlers: Record<string, (a: Args) => unknown> = {
     const found = findRequest(w, request.id);
     const chain = found?.chain ?? (a.parentId ? [findGroup(w, s(a, "parentId"))?.group].filter(Boolean) as MockGroup[] : []);
     await delay(250 + Math.random() * 300);
-    return fakeRun(w, request, chain, (a.environmentId as string) ?? null);
+    const run = fakeRun(w, request, chain, (a.environmentId as string) ?? null);
+    recordHistory(w, run, (a.environmentId as string) ?? null);
+    return run;
   },
   run_collection: async (a) => {
     const w = ws(a.workspaceId);
@@ -541,6 +603,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     walk(g.group, []);
     await delay(600);
     const results = all.map((x) => fakeRun(w, x.request, x.chain, (a.environmentId as string) ?? null));
+    results.forEach((run) => recordHistory(w, run, (a.environmentId as string) ?? null));
     const items = results.map((res, i) => ({
       requestId: all[i].request.id,
       name: all[i].request.name,
@@ -705,6 +768,14 @@ const handlers: Record<string, (a: Args) => unknown> = {
     const report = syncReport(ws(a.workspaceId));
     listeners.get("sync-status")?.forEach((h) => h({ workspaceId: a.workspaceId, report }));
     return report;
+  },
+  get_history: (a) => structuredClone(ws(a.workspaceId).history),
+  clear_history: (a) => void (ws(a.workspaceId).history = []),
+  git_file_changes: (a): FileChanges => {
+    const path = s(a, "path");
+    const name = path.split("/").pop() ?? path;
+    const known = FILE_CHANGES[name];
+    return { path, diff: SAMPLE_DIFF, ...(known ?? { kind: "other", additions: 0, deletions: 0, changes: null }) };
   },
   sync_statuses: () => Object.fromEntries(db.workspaces.map((w) => [w.entry.id, syncReport(w)])),
 };

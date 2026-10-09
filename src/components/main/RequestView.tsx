@@ -1,9 +1,9 @@
 "use client";
 
-import { AlertTriangle, ChevronDown, Loader2, Save, Send } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Save, Send } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import { tabDirty, useStore, type RequestTab } from "@/lib/store";
+import { tabDirty, useStore, type PaneLayout, type RequestTab } from "@/lib/store";
 import type { Auth, Body, GroupNode, KeyValue, Request } from "@/lib/types";
 import { cx, findChain, METHODS, methodColor } from "@/lib/util";
 
@@ -11,21 +11,25 @@ import { AuthEditor } from "../editors/AuthEditor";
 import { BodyEditor } from "../editors/BodyEditor";
 import { KeyValueEditor, makeKv } from "../editors/KeyValueEditor";
 import { ScriptsEditor } from "../editors/ScriptsEditor";
+import { VarInput } from "../editors/VarInput";
+import { Switch } from "../ui/Controls";
 import { MenuButton } from "../ui/Menu";
 import { TabStrip } from "../ui/Segmented";
 import { ResponseViewer } from "./ResponseViewer";
 
-type Section = "params" | "headers" | "body" | "auth" | "scripts" | "settings" | "docs";
+type Section = "params" | "body" | "headers" | "auth" | "scripts" | "settings" | "docs";
 
-function useSplit(initial = 0.48) {
-  const [ratio, setRatio] = useState(initial);
+/** Draggable split between the request and response panes. */
+function useSplit(layout: PaneLayout) {
+  const [ratio, setRatio] = useState(0.52);
   const container = useRef<HTMLDivElement>(null);
   const onMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     const move = (ev: MouseEvent) => {
       const rect = container.current?.getBoundingClientRect();
       if (!rect) return;
-      setRatio(Math.min(0.85, Math.max(0.15, (ev.clientY - rect.top) / rect.height)));
+      const r = layout === "side" ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
+      setRatio(Math.min(0.8, Math.max(0.2, r)));
     };
     const up = () => {
       window.removeEventListener("mousemove", move);
@@ -49,7 +53,7 @@ function implicitHeaders(body: Body | undefined): string[] {
     case "form-urlencoded":
       return ["Content-Type: application/x-www-form-urlencoded"];
     case "multipart":
-      return ["Content-Type: multipart/form-data; boundary=…"];
+      return ["Content-Type: multipart/form-data"];
     default:
       return [];
   }
@@ -63,11 +67,42 @@ function inheritedAuth(chain: GroupNode[]): { from: string; auth: Auth } | null 
   return null;
 }
 
+function LayoutToggle() {
+  const layout = useStore((s) => s.layout);
+  const setLayout = useStore((s) => s.setLayout);
+  const btn = (id: PaneLayout, label: string, path: string) => (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={layout === id}
+      onClick={() => setLayout(id)}
+      className={cx("flex h-[26px] w-7 items-center justify-center rounded-[7px]", layout === id ? "bg-selected text-text" : "text-faint hover:text-text")}
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden>
+        <rect x="2.5" y="3" width="11" height="10" rx="2" />
+        <path d={path} />
+      </svg>
+    </button>
+  );
+  return (
+    <div className="flex gap-0.5 rounded-[9px] border border-border-mid p-0.5">
+      {btn("stack", "Response below", "M2.5 8h11")}
+      {btn("side", "Response beside", "M8 3v10")}
+    </div>
+  );
+}
+
 export function RequestView({ tab }: { tab: RequestTab }) {
   const tree = useStore((s) => s.tree);
+  const layout = useStore((s) => s.layout);
+  const envName = useStore((s) => {
+    const id = s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.prefs.activeEnvironment;
+    return s.tree?.environments.find((e) => e.id === id)?.name ?? null;
+  });
   const { updateTab, sendTab, saveTab, reloadTabFromDisk } = useStore.getState();
   const [section, setSection] = useState<Section>(() => (tab.draft.body?.mode && tab.draft.body.mode !== "none" ? "body" : "params"));
-  const { ratio, container, onMouseDown } = useSplit();
+  const { ratio, container, onMouseDown } = useSplit(layout);
   const r = tab.draft;
   const dirty = tabDirty(tab);
   const chain = useMemo(() => findChain(tree?.collections ?? [], tab.requestId) ?? [], [tree, tab.requestId]);
@@ -77,133 +112,178 @@ export function RequestView({ tab }: { tab: RequestTab }) {
   const inheritedHeaders: (KeyValue & { from: string })[] = chain.flatMap((g) =>
     (g.meta.headers ?? []).filter((h) => h.enabled).map((h) => ({ ...h, from: g.meta.name })),
   );
-
-  const counts = {
-    params: (r.params ?? []).filter((p) => p.enabled && p.key).length,
-    headers: (r.headers ?? []).filter((h) => h.enabled && h.key).length,
-  };
+  const auth = r.auth?.type === "inherit" ? inheritedAuth(chain)?.auth : r.auth;
+  const authHeader = auth && auth.type !== "none" && auth.type !== "inherit" && !(auth.type === "api-key" && auth.location === "query");
+  const autoHeaders = [
+    ...inheritedHeaders.map((h) => `${h.key} (from ${h.from})`),
+    ...implicitHeaders(r.body).map((h) => h.split(":")[0]),
+    ...(authHeader ? [auth.type === "api-key" ? auth.key : "Authorization"] : []),
+    "Host",
+    "User-Agent",
+  ];
+  const paramCount = (r.params ?? []).filter((p) => p.enabled && p.key).length;
+  const headerCount = (r.headers ?? []).filter((h) => h.enabled && h.key).length;
+  const hasScripts = !!(r.scripts?.preRequest?.trim() || r.scripts?.postResponse?.trim());
+  const side = layout === "side";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {tab.diskVersion && (
-        <div className="flex items-center gap-2 border-b border-warn/30 bg-warn/10 px-4 py-2 text-[12.5px] text-warn">
+        <div className="flex items-center gap-3 border-b border-warn/25 bg-warn/10 px-4 py-2 text-[13px] text-warn">
           <AlertTriangle size={14} />
-          <span className="flex-1">This request changed on disk (pulled from your team, or edited by an agent) while you had unsaved edits.</span>
-          <button className="btn h-7 text-[12px]" onClick={() => reloadTabFromDisk(tab.id)}>
+          <span className="flex-1">This request changed on disk (a teammate&apos;s change was pulled, or an agent edited it) while you had unsaved edits.</span>
+          <button type="button" className="btn h-7" onClick={() => reloadTabFromDisk(tab.id)}>
             Load theirs
           </button>
-          <button className="btn h-7 text-[12px]" onClick={() => updateTab<RequestTab>(tab.id, (t) => ({ ...t, diskVersion: null }))}>
+          <button type="button" className="btn h-7" onClick={() => updateTab<RequestTab>(tab.id, (t) => ({ ...t, diskVersion: null }))}>
             Keep mine
           </button>
         </div>
       )}
 
-      {/* Breadcrumb + name */}
-      <div className="flex items-center gap-1.5 px-4 pt-3 text-[12px] text-faint">
+      {/* breadcrumb */}
+      <div className="flex shrink-0 items-center gap-2.5 overflow-hidden px-4 pt-2.5 pb-2 text-[13px] whitespace-nowrap text-muted">
         {chain.map((g) => (
-          <span key={g.meta.id} className="flex items-center gap-1.5">
-            <span className="truncate">{g.meta.name}</span>
-            <span>/</span>
+          <span key={g.meta.id} className="flex shrink-0 items-center gap-2.5">
+            <span>{g.meta.name}</span>
+            <ChevronRight size={11} strokeWidth={2} className="text-faint" />
           </span>
         ))}
         <input
-          className="min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 text-[13px] font-medium text-text outline-none hover:bg-hover focus:bg-panel-2"
+          aria-label="Request name"
           value={r.name}
           onChange={(e) => set({ name: e.target.value })}
-          aria-label="Request name"
+          className="-mx-1 min-w-0 flex-1 rounded px-1 text-text outline-none hover:bg-hover focus:bg-panel-2"
         />
       </div>
 
-      {/* URL bar */}
-      <div className="flex items-center gap-2 px-4 py-2.5">
-        <div className="flex h-9 min-w-0 flex-1 items-center rounded-lg border border-border-strong bg-panel-2 focus-within:border-accent">
+      {/* URL */}
+      <div className="flex shrink-0 items-center gap-2.5 px-4 pb-3">
+        <div className="flex h-9 min-w-0 flex-1 items-center rounded-lg border border-border-strong focus-within:border-accent-line">
           <MenuButton
             items={METHODS.map((m) => ({ label: m, onSelect: () => set({ method: m }) }))}
-            className={cx("flex h-full w-[104px] shrink-0 items-center justify-between gap-1 border-r border-border px-3 font-mono text-[12px] font-bold", methodColor(r.method))}
-            title="Method"
+            className={cx(
+              "flex h-full w-[88px] shrink-0 items-center justify-between rounded-l-lg border-r border-border-strong px-3 font-mono text-[13px] font-semibold",
+              methodColor(r.method),
+            )}
+            title="HTTP method"
             minWidth={120}
           >
-            {r.method}
-            <ChevronDown size={13} className="text-faint" />
+            <span>{r.method}</span>
+            <ChevronDown size={12} strokeWidth={1.8} className="text-muted" />
           </MenuButton>
-          <input
-            className="h-full min-w-0 flex-1 bg-transparent px-3 font-mono text-[12.5px] outline-none placeholder:text-faint"
-            placeholder="{{baseUrl}}/path"
-            value={r.url}
-            spellCheck={false}
-            onChange={(e) => set({ url: e.target.value })}
-            onKeyDown={(e) => e.key === "Enter" && void sendTab(tab.id)}
+          <VarInput
             aria-label="URL"
+            value={r.url}
+            placeholder="{{baseUrl}}/path"
+            onChange={(url) => set({ url })}
+            onKeyDown={(e) => e.key === "Enter" && void sendTab(tab.id)}
+            className="h-full font-mono text-[13px]"
           />
         </div>
-        <button className="btn-primary h-9 px-5" onClick={() => void sendTab(tab.id)} disabled={tab.running} title="Send (Ctrl+Enter)">
-          {tab.running ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+        <button
+          type="button"
+          onClick={() => void sendTab(tab.id)}
+          disabled={tab.running}
+          title="Send (Ctrl+Enter)"
+          className="inline-flex h-9 items-center gap-[9px] rounded-lg bg-accent pr-3.5 pl-3 text-[13.5px] font-semibold text-white shadow-[0_0_0_1px_rgba(91,147,255,0.3)] hover:bg-accent-strong disabled:opacity-70"
+        >
+          {tab.running ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} strokeWidth={1.8} />}
           Send
         </button>
-        <button className={cx("btn h-9", dirty && "border-accent text-accent")} onClick={() => void saveTab(tab.id)} disabled={!dirty} title="Save (Ctrl+S)">
-          <Save size={14} /> Save
+        <button
+          type="button"
+          onClick={() => void saveTab(tab.id)}
+          disabled={!dirty}
+          title="Save (Ctrl+S)"
+          className={cx(
+            "inline-flex h-9 items-center gap-[9px] rounded-lg border px-3.5 text-[13.5px] font-medium",
+            dirty ? "border-accent-line text-text hover:bg-hover" : "border-border-strong text-muted",
+          )}
+        >
+          <Save size={15} strokeWidth={1.4} />
+          Save
         </button>
       </div>
 
-      <div ref={container} className="flex min-h-0 flex-1 flex-col">
-        <div className="flex min-h-0 flex-col" style={{ flexBasis: `${ratio * 100}%`, flexGrow: 0, flexShrink: 0 }}>
+      {/* panes */}
+      <div ref={container} className={cx("flex min-h-0 flex-1 border-t border-border", side ? "flex-row" : "flex-col")}>
+        <section aria-label="Request" className="flex min-h-0 min-w-0 flex-col" style={{ flex: `0 0 ${ratio * 100}%` }}>
           <TabStrip<Section>
+            label="Request sections"
             value={section}
             onChange={setSection}
+            right={<LayoutToggle />}
             tabs={[
-              { id: "params", label: "Params", badge: counts.params || undefined },
-              { id: "headers", label: "Headers", badge: counts.headers || undefined },
+              { id: "params", label: "Query params", badge: paramCount || undefined },
               { id: "body", label: "Body", badge: r.body?.mode && r.body.mode !== "none" ? r.body.mode : undefined },
-              { id: "auth", label: "Auth", badge: r.auth?.type && r.auth.type !== "inherit" ? r.auth.type : undefined },
-              { id: "scripts", label: "Scripts", badge: r.scripts?.preRequest?.trim() || r.scripts?.postResponse?.trim() ? "●" : undefined },
+              { id: "headers", label: "Headers", badge: headerCount || undefined },
+              { id: "auth", label: "Authorization" },
+              { id: "scripts", label: "Scripts", badge: hasScripts ? "•" : undefined, tone: "accent" },
               { id: "settings", label: "Settings" },
               { id: "docs", label: "Docs" },
             ]}
           />
           <div className="min-h-0 flex-1 overflow-auto">
             {section === "params" && (
-              <div className="p-3">
-                <KeyValueEditor rows={r.params ?? []} onChange={(params) => set({ params })} make={makeKv} />
-                <p className="mt-2 text-[11.5px] text-faint">Appended to the URL as query parameters. Values support {"{{variables}}"}.</p>
+              <div className="px-4 py-3">
+                <KeyValueEditor rows={r.params ?? []} onChange={(params) => set({ params })} make={makeKv} describe />
               </div>
             )}
             {section === "headers" && (
-              <div className="p-3">
-                <KeyValueEditor rows={r.headers ?? []} onChange={(headers) => set({ headers })} make={makeKv} keyPlaceholder="Header" />
-                {(inheritedHeaders.length > 0 || implicitHeaders(r.body).length > 0) && (
-                  <div className="mt-3">
-                    <div className="label">Also sent</div>
-                    <div className="space-y-0.5 font-mono text-[11.5px] text-muted">
-                      {inheritedHeaders.map((h) => (
-                        <div key={`${h.from}-${h.key}`}>
-                          {h.key}: {h.value} <span className="font-sans text-faint">— from {h.from}</span>
-                        </div>
-                      ))}
-                      {implicitHeaders(r.body).map((h) => (
-                        <div key={h}>
-                          {h} <span className="font-sans text-faint">— from body (unless set above)</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+              <div className="px-4 py-3">
+                <KeyValueEditor rows={r.headers ?? []} onChange={(headers) => set({ headers })} make={makeKv} keyPlaceholder="Key" describe />
+                <p className="mx-1 mt-3 text-[12.5px] leading-[18px] text-faint">
+                  {autoHeaders.length} headers are added automatically: {autoHeaders.join(", ")}.
+                </p>
               </div>
             )}
             {section === "body" && <BodyEditor body={r.body ?? { mode: "none" }} onChange={(body) => set({ body })} />}
-            {section === "auth" && <AuthEditor auth={r.auth ?? { type: "inherit" }} onChange={(auth) => set({ auth })} inherited={inheritedAuth(chain)} />}
+            {section === "auth" && (
+              <AuthEditor auth={r.auth ?? { type: "inherit" }} onChange={(a) => set({ auth: a })} inherited={inheritedAuth(chain)} environment={envName} />
+            )}
             {section === "scripts" && (
               <ScriptsEditor
                 scripts={r.scripts ?? {}}
                 onChange={(scripts) => set({ scripts })}
-                scopeNote={chain.some((g) => g.meta.scripts?.preRequest || g.meta.scripts?.postResponse) ? "Collection/folder scripts run first." : undefined}
+                scopeNote={
+                  chain.some((g) => g.meta.scripts?.preRequest || g.meta.scripts?.postResponse) ? "Collection and folder scripts run first." : undefined
+                }
               />
             )}
             {section === "settings" && (
-              <div className="max-w-[520px] space-y-3 p-4">
-                <div>
-                  <label className="label">Timeout (ms)</label>
+              <div className="px-5 py-2">
+                {[
+                  {
+                    label: "Follow redirects",
+                    desc: "Up to 10 hops before the request fails.",
+                    on: r.settings?.followRedirects ?? true,
+                    toggle: (v: boolean) => set({ settings: { verifyTls: true, ...r.settings, followRedirects: v } }),
+                  },
+                  {
+                    label: "Verify TLS certificates",
+                    desc: "Turn off only for local development with self-signed certificates.",
+                    on: r.settings?.verifyTls ?? true,
+                    toggle: (v: boolean) => set({ settings: { followRedirects: true, ...r.settings, verifyTls: v } }),
+                  },
+                ].map((row) => (
+                  <div key={row.label} className="flex min-h-[62px] items-center gap-3.5 border-b border-border-soft">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[14.5px]">{row.label}</div>
+                      <div className="mt-0.5 text-[12.5px] text-faint">{row.desc}</div>
+                    </div>
+                    <Switch checked={row.on} onChange={row.toggle} label={row.label} />
+                  </div>
+                ))}
+                <div className="flex min-h-[62px] items-center gap-3.5 border-b border-border-soft">
+                  <div className="min-w-0 flex-1">
+                    <label htmlFor="req-timeout" className="text-[14.5px]">
+                      Timeout
+                    </label>
+                    <div className="mt-0.5 text-[12.5px] text-faint">Give up after this many milliseconds. Defaults to 30 000.</div>
+                  </div>
                   <input
-                    className="input w-48"
+                    id="req-timeout"
                     type="number"
                     min={1}
                     placeholder="30000"
@@ -211,44 +291,37 @@ export function RequestView({ tab }: { tab: RequestTab }) {
                     onChange={(e) =>
                       set({ settings: { followRedirects: true, verifyTls: true, ...r.settings, timeoutMs: e.target.value ? Number(e.target.value) : undefined } })
                     }
+                    className="input h-8 w-28 text-right font-mono text-[13px]"
                   />
                 </div>
-                <label className="flex items-center gap-2 text-[12.5px]">
-                  <input
-                    type="checkbox"
-                    className="accent-[var(--accent)]"
-                    checked={r.settings?.followRedirects ?? true}
-                    onChange={(e) => set({ settings: { verifyTls: true, ...r.settings, followRedirects: e.target.checked } })}
-                  />
-                  Follow redirects
-                </label>
-                <label className="flex items-center gap-2 text-[12.5px]">
-                  <input
-                    type="checkbox"
-                    className="accent-[var(--accent)]"
-                    checked={r.settings?.verifyTls ?? true}
-                    onChange={(e) => set({ settings: { followRedirects: true, ...r.settings, verifyTls: e.target.checked } })}
-                  />
-                  Verify TLS certificates
-                </label>
               </div>
             )}
             {section === "docs" && (
-              <div className="h-full p-3">
+              <div className="flex h-full max-w-[640px] flex-col p-5">
+                <div className="mb-2 text-[17px] font-semibold tracking-[-0.01em]">{r.name}</div>
                 <textarea
-                  className="input h-full min-h-[120px] resize-none py-2"
-                  placeholder="Describe what this request does, expected responses, gotchas…"
+                  aria-label="Documentation"
+                  placeholder="Describe what this request does, what it expects and what it returns."
                   value={r.description ?? ""}
                   onChange={(e) => set({ description: e.target.value })}
+                  className="min-h-[160px] flex-1 resize-none bg-transparent text-[14px] leading-[22px] text-muted outline-none placeholder:text-dim"
                 />
               </div>
             )}
           </div>
-        </div>
-        <div role="separator" aria-orientation="horizontal" onMouseDown={onMouseDown} className="h-[5px] shrink-0 cursor-row-resize border-t border-border hover:bg-accent/40" />
-        <div className="flex min-h-0 flex-1 flex-col">
+        </section>
+
+        <div
+          role="separator"
+          aria-orientation={side ? "vertical" : "horizontal"}
+          aria-label="Resize panes"
+          onMouseDown={onMouseDown}
+          className={cx("shrink-0 bg-border hover:bg-accent-line", side ? "w-px cursor-col-resize" : "h-px cursor-row-resize")}
+        />
+
+        <section aria-label="Response" className="flex min-h-0 min-w-0 flex-1 flex-col bg-sunken">
           <ResponseViewer tab={tab} />
-        </div>
+        </section>
       </div>
     </div>
   );

@@ -60,12 +60,16 @@ export function FloatingMenu({
     <div
       ref={ref}
       role="menu"
-      className="fixed z-50 rounded-lg border border-border-strong bg-elev p-1 shadow-[var(--shadow)]"
+      className="fixed z-50 rounded-[10px] border border-border-strong bg-elev p-1.5 shadow-[var(--shadow)]"
       style={{ left: pos.x, top: pos.y, minWidth }}
     >
       {items.map((item, i) =>
         item.separator ? (
-          <div key={i} className="my-1 h-px bg-border" />
+          <div key={i} className="mx-1 my-1.5 h-px bg-border" />
+        ) : item.disabled && !item.onSelect ? (
+          <div key={i} className="px-2.5 pt-1.5 pb-1 text-[11px] font-semibold tracking-[0.06em] text-faint">
+            {item.label}
+          </div>
         ) : (
           <button
             key={i}
@@ -76,13 +80,13 @@ export function FloatingMenu({
               item.onSelect?.();
             }}
             className={cx(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] disabled:opacity-40",
-              item.danger ? "text-danger hover:bg-danger-soft" : "text-text hover:bg-hover",
+              "flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] disabled:opacity-40",
+              item.danger ? "text-danger hover:bg-danger-soft" : "text-text-2 hover:bg-hover hover:text-text",
             )}
           >
             <span className="flex w-4 justify-center text-muted">{item.icon}</span>
             <span className="flex-1 truncate">{item.label}</span>
-            {item.hint && <span className="text-[11px] text-faint">{item.hint}</span>}
+            {item.hint && <span className="text-[11.5px] text-faint">{item.hint}</span>}
           </button>
         ),
       )}

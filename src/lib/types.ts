@@ -383,3 +383,41 @@ export interface SyncReport {
   checkedAt: string;
   message?: string | null;
 }
+
+export interface HistoryEntry {
+  id: string;
+  requestId?: string | null;
+  name: string;
+  method: string;
+  url: string;
+  status?: number | null;
+  timeMs?: number | null;
+  ok: boolean;
+  error?: string | null;
+  testsPassed: number;
+  testsFailed: number;
+  environment?: string | null;
+  at: string;
+}
+
+export type ChangeKind = "added" | "updated" | "removed";
+
+export interface SemanticChange {
+  kind: ChangeKind;
+  label: string;
+  subject: string;
+  area: string;
+  before?: string | null;
+  after?: string | null;
+}
+
+export type FileKind = "request" | "environment" | "collection" | "folder" | "workspace" | "saved-response" | "other";
+
+export interface FileChanges {
+  path: string;
+  kind: FileKind;
+  changes?: SemanticChange[] | null;
+  diff: string;
+  additions: number;
+  deletions: number;
+}

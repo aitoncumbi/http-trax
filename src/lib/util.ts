@@ -145,3 +145,60 @@ export function prettyJson(text: string): string | null {
 export function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
+
+/** Short label used in method pills (DELETE → DEL, OPTIONS → OPT). */
+export function methodLabel(method: string): string {
+  const m = method.toUpperCase();
+  if (m === "DELETE") return "DEL";
+  if (m === "OPTIONS") return "OPT";
+  return m.length > 5 ? m.slice(0, 5) : m;
+}
+
+/** Tailwind classes for a method pill (text + 14% tinted background). */
+export function methodPill(method: string): string {
+  switch (method.toUpperCase()) {
+    case "GET":
+      return "text-method-get bg-method-get/14";
+    case "POST":
+      return "text-method-post bg-method-post/14";
+    case "PUT":
+      return "text-method-put bg-method-put/14";
+    case "PATCH":
+      return "text-method-patch bg-method-patch/14";
+    case "DELETE":
+      return "text-method-delete bg-method-delete/14";
+    default:
+      return "text-muted bg-selected";
+  }
+}
+
+/** Colour cue for an environment by its name: production red, staging amber, local green. */
+export function envTone(name: string | null | undefined): string {
+  const n = (name ?? "").toLowerCase();
+  if (!n) return "var(--dim)";
+  if (/\bprod|live\b/.test(n)) return "var(--danger)";
+  if (/stag|uat|pre|qa|test|sandbox/.test(n)) return "var(--warn)";
+  if (/local|dev/.test(n)) return "var(--ok)";
+  return "var(--info)";
+}
+
+export function initials(name: string): string {
+  const words = name.replace(/[^\p{L}\p{N}\s]/gu, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return (words[0] ?? "?").slice(0, 2).toUpperCase();
+}
+
+const AVATAR_TONES = [
+  { bg: "rgba(91,147,255,0.18)", fg: "var(--accent-text-2)" },
+  { bg: "rgba(195,155,255,0.16)", fg: "var(--var)" },
+  { bg: "rgba(95,211,154,0.16)", fg: "var(--ok)" },
+  { bg: "rgba(240,180,92,0.16)", fg: "var(--warn)" },
+  { bg: "rgba(255,123,114,0.16)", fg: "var(--danger)" },
+];
+
+/** Stable avatar colours per workspace id. */
+export function avatarTone(id: string): { bg: string; fg: string } {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_TONES[h % AVATAR_TONES.length];
+}
