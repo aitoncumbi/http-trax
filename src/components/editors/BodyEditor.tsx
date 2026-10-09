@@ -5,6 +5,7 @@ import { Wand2 } from "lucide-react";
 import type { Body, BodyMode, MultipartField } from "@/lib/types";
 import { prettyJson } from "@/lib/util";
 
+import { Radio } from "../ui/Controls";
 import { CodeEditor } from "./CodeEditor";
 import { KeyValueEditor, makeKv } from "./KeyValueEditor";
 
@@ -53,36 +54,39 @@ function switchMode(body: Body, mode: BodyMode): Body {
 export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body) => void }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-1 px-3 py-2">
-        {MODES.map((m) => (
-          <label key={m.id} className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted hover:bg-hover has-[:checked]:text-text">
-            <input type="radio" name="body-mode" checked={body.mode === m.id} onChange={() => onChange(switchMode(body, m.id))} className="accent-[var(--accent)]" />
-            {m.label}
-          </label>
-        ))}
+      <div className="flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border-soft px-4">
+        <div role="radiogroup" aria-label="Body type" className="flex min-w-0 items-center gap-[18px] overflow-x-auto">
+          {MODES.map((m) => (
+            <Radio key={m.id} checked={body.mode === m.id} onChange={() => onChange(switchMode(body, m.id))}>
+              {m.label}
+            </Radio>
+          ))}
+        </div>
         {body.mode === "json" && (
           <button
-            className="btn-ghost ml-auto"
+            type="button"
+            className="btn-ghost shrink-0"
             title="Format JSON"
             onClick={() => {
               const pretty = prettyJson(body.text);
               if (pretty) onChange({ ...body, text: pretty });
             }}
           >
-            <Wand2 size={12} /> Beautify
+            <Wand2 size={14} strokeWidth={1.5} /> Beautify
           </button>
         )}
         {body.mode === "text" && (
           <input
-            className="input ml-auto h-7 w-56 font-mono text-[11.5px]"
+            className="input h-7 w-56 shrink-0 font-mono text-[12px]"
             placeholder="Content-Type (text/plain)"
+            aria-label="Content type"
             value={body.contentType ?? ""}
             onChange={(e) => onChange({ ...body, contentType: e.target.value || undefined })}
           />
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-border">
-        {body.mode === "none" && <p className="p-4 text-[12.5px] text-faint">This request has no body.</p>}
+      <div className="min-h-0 flex-1 overflow-auto">
+        {body.mode === "none" && <div className="flex h-full items-center justify-center text-[14px] text-faint">This request has no body.</div>}
         {(body.mode === "json" || body.mode === "xml" || body.mode === "text") && (
           <CodeEditor
             value={body.text}
@@ -92,12 +96,12 @@ export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body)
           />
         )}
         {body.mode === "form-urlencoded" && (
-          <div className="p-3">
+          <div className="px-4 py-3">
             <KeyValueEditor rows={body.fields} onChange={(fields) => onChange({ ...body, fields })} make={makeKv} />
           </div>
         )}
         {body.mode === "multipart" && (
-          <div className="p-3">
+          <div className="px-4 py-3">
             <KeyValueEditor<MultipartField>
               rows={body.fields}
               files
@@ -109,11 +113,11 @@ export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body)
         {body.mode === "graphql" && (
           <div className="grid h-full min-h-0 grid-cols-[2fr_1fr]">
             <div className="min-h-0 border-r border-border">
-              <div className="label px-3 pt-2">Query</div>
+              <div className="eyebrow px-4 pt-3">Query</div>
               <CodeEditor value={body.query} onChange={(query) => onChange({ ...body, query })} placeholder="query { users { id name } }" />
             </div>
             <div className="min-h-0">
-              <div className="label px-3 pt-2">Variables (JSON)</div>
+              <div className="eyebrow px-4 pt-3">Variables (JSON)</div>
               <CodeEditor value={body.variables} language="json" onChange={(variables) => onChange({ ...body, variables })} placeholder='{ "id": "{{userId}}" }' />
             </div>
           </div>

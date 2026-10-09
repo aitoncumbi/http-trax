@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag like v0.2.0 to build Linux and Windows installers and attach
-# them to a draft GitHub release.
+# Push a tag like v0.2.0 (or create a release with a new tag in the GitHub UI)
+# to build Linux and Windows installers and publish them on that release.
+# Tags with a suffix (v0.2.0-beta.1) are published as pre-releases.
 on:
   push:
     tags: ["v*"]
@@ -54,8 +55,8 @@ jobs:
           releaseBody: |
             Installers for Linux (.deb, .rpm, .AppImage) and Windows (.msi, setup .exe).
             The `trax-mcp` MCP server ships inside each installer; standalone binaries are attached too.
-          releaseDraft: true
-          prerelease: false
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
       - name: Attach standalone MCP server
         shell: bash

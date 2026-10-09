@@ -7,7 +7,6 @@ mod sync;
 mod watch;
 
 use state::AppState;
-use tauri::Manager;
 
 pub fn run() {
     tracing_subscriber::fmt()
@@ -25,9 +24,6 @@ pub fn run() {
             let handle = app.handle().clone();
             watch::refresh(&handle);
             sync::start(handle);
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title(&format!("http-trax {}", env!("CARGO_PKG_VERSION")));
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -64,6 +60,8 @@ pub fn run() {
             commands::save_response,
             commands::delete_saved_response,
             commands::inspect_path,
+            commands::get_history,
+            commands::clear_history,
             git_commands::git_status,
             git_commands::git_init,
             git_commands::git_stage,
@@ -94,6 +92,7 @@ pub fn run() {
             git_commands::git_set_identity,
             git_commands::sync_now,
             git_commands::sync_statuses,
+            git_commands::git_file_changes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running http-trax");

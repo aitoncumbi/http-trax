@@ -2,11 +2,8 @@
 
 import {
   AlertTriangle,
-  ChevronRight,
   Copy,
   Crosshair,
-  Folder,
-  FolderOpen,
   FolderPlus,
   MoreHorizontal,
   Pencil,
@@ -22,11 +19,13 @@ import { useCallback, useMemo, useState } from "react";
 
 import { useStore, useWorkspaceTabs } from "@/lib/store";
 import type { GroupNode, RequestSummary, TreeItem } from "@/lib/types";
-import { countRequests, cx, filterTree, methodColor } from "@/lib/util";
+import { countRequests, cx, filterTree } from "@/lib/util";
 
+import { MethodPill } from "../ui/Brand";
 import { MenuButton, useContextMenu, type MenuItem } from "../ui/Menu";
 
 const EXPANDED_KEY = "http-trax.expanded.";
+const INDENT = 14;
 
 function loadExpanded(workspaceId: string | null): Set<string> {
   if (!workspaceId) return new Set();
@@ -60,6 +59,30 @@ function useExpanded(workspaceId: string | null) {
   return { expanded, toggle };
 }
 
+function FolderIcon({ open }: { open: boolean }) {
+  return open ? (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" className="shrink-0 text-muted" aria-hidden>
+      <path d="M2 5.5V4a1.5 1.5 0 0 1 1.5-1.5h2.4l1.3 1.5h4.8A1.5 1.5 0 0 1 13.5 5.5V6" />
+      <path d="M2.3 12.6 3.9 7.3a1 1 0 0 1 1-.7h9a.9.9 0 0 1 .9 1.2L13.1 12a1.5 1.5 0 0 1-1.4 1H3.8a1.4 1.4 0 0 1-1.5-.4z" />
+    </svg>
+  ) : (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" className="shrink-0 text-muted" aria-hidden>
+      <path d="M1.8 4.4A1.5 1.5 0 0 1 3.3 2.9h2.4L7 4.4h5.7a1.5 1.5 0 0 1 1.5 1.5v5.8a1.5 1.5 0 0 1-1.5 1.5H3.3a1.5 1.5 0 0 1-1.5-1.5z" />
+    </svg>
+  );
+}
+
+/** Vertical guides showing nesting, one per ancestor level. */
+function Guides({ depth }: { depth: number }) {
+  return (
+    <>
+      {Array.from({ length: depth }, (_, i) => (
+        <span key={i} aria-hidden className="absolute top-0 bottom-0 w-px bg-border" style={{ left: 16 + i * INDENT }} />
+      ))}
+    </>
+  );
+}
+
 export function CollectionsPanel() {
   const tree = useStore((s) => s.tree);
   const treeError = useStore((s) => s.treeError);
@@ -87,9 +110,7 @@ export function CollectionsPanel() {
           .filter((c): c is GroupNode => c !== null)
       : visible;
     // Bookmarked collections stay on top, in the order they were pinned.
-    const pinned = bookmarks
-      .map((id) => filtered.find((c) => c.meta.id === id))
-      .filter((c): c is GroupNode => !!c);
+    const pinned = bookmarks.map((id) => filtered.find((c) => c.meta.id === id)).filter((c): c is GroupNode => !!c);
     const others = filtered.filter((c) => !bookmarks.includes(c.meta.id));
     return { pinned, others };
   }, [collections, scopedCollection, entry, query]);
@@ -98,33 +119,34 @@ export function CollectionsPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between px-3 pt-3 pb-2">
-        <h2 className="text-[11px] font-semibold tracking-wider text-faint uppercase">Collections</h2>
-        <div className="flex items-center">
-          <button className="icon-btn" title="New collection" onClick={() => void createCollection()}>
-            <Plus size={15} />
-          </button>
-        </div>
-      </div>
-      <div className="px-3 pb-2">
-        <div className="relative">
-          <Search size={13} className="absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
+      <div className="flex shrink-0 items-center gap-2.5 pt-2.5 pr-2 pb-1.5 pl-2.5">
+        <label className="flex h-[30px] flex-1 items-center gap-2 rounded-[7px] border border-border-strong px-2.5 text-faint focus-within:border-accent-line">
+          <Search size={14} strokeWidth={1.5} />
+          <span className="sr-only">Search requests</span>
           <input
-            className="input h-7 pl-7 text-[12.5px]"
-            placeholder="Filter requests"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none placeholder:text-faint"
+            placeholder="Search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-        </div>
+          {query && (
+            <button type="button" aria-label="Clear search" onClick={() => setQuery("")} className="text-faint hover:text-text">
+              <X size={13} />
+            </button>
+          )}
+        </label>
+        <button type="button" className="icon-btn" aria-label="New collection" title="New collection" onClick={() => void createCollection()}>
+          <Plus size={16} strokeWidth={1.6} />
+        </button>
       </div>
 
       {scopedCollection && (
-        <div className="mx-3 mb-2 flex items-center gap-2 rounded-md border border-accent/30 bg-accent-soft px-2.5 py-1.5 text-[12px]">
-          <Crosshair size={13} className="shrink-0 text-accent" />
+        <div className="mx-2.5 mt-1 mb-1.5 flex items-center gap-2 rounded-lg bg-accent-soft py-1.5 pr-1.5 pl-2.5 text-[12.5px] text-accent-text-2">
+          <Crosshair size={13} className="shrink-0" />
           <span className="flex-1 truncate">
-            Scoped to <strong className="font-semibold">{scopedCollection.meta.name}</strong>
+            Only <strong className="font-semibold">{scopedCollection.meta.name}</strong>
           </span>
-          <button className="btn-ghost h-6 px-1.5 text-[11.5px] text-accent" onClick={() => void setScope(null)}>
+          <button type="button" className="rounded-md px-2 py-0.5 text-[12px] font-medium hover:bg-accent-soft" onClick={() => void setScope(null)}>
             Show all
           </button>
         </div>
@@ -132,52 +154,51 @@ export function CollectionsPanel() {
 
       {tree && tree.problems.length > 0 && (
         <div
-          className="mx-3 mb-2 flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-2.5 py-1.5 text-[12px] text-warn"
+          className="mx-2.5 mt-1 mb-1.5 flex items-start gap-2 rounded-lg bg-warn/12 px-2.5 py-1.5 text-[12.5px] text-warn"
           title={tree.problems.map((p) => `${p.path}: ${p.message}`).join("\n")}
         >
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <span>
-            {tree.problems.length} file{tree.problems.length > 1 ? "s" : ""} couldn&apos;t be loaded (unresolved merge conflict?). See Source
-            control.
+            {tree.problems.length} file{tree.problems.length > 1 ? "s" : ""} couldn&apos;t be loaded. Check Source control for merge conflicts.
           </span>
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-4" role="tree">
-        {treeError && <p className="px-2 py-3 text-[12.5px] text-danger">{treeError}</p>}
-        {!tree && !treeError && <p className="px-2 py-3 text-[12.5px] text-faint">Loading…</p>}
+      <nav aria-label="Collection tree" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-1.5 pt-0.5 pb-2.5" role="tree">
+        {treeError && <p className="px-2 py-3 text-[13px] text-danger">{treeError}</p>}
+        {!tree && !treeError && <p className="px-2 py-3 text-[13px] text-faint">Loading…</p>}
         {tree && collections.length === 0 && (
-          <div className="mx-1.5 mt-2 rounded-lg border border-dashed border-border-strong p-4 text-center">
-            <p className="text-[12.5px] text-muted">No collections yet.</p>
-            <button className="btn-primary mt-3" onClick={() => void createCollection()}>
+          <div className="mx-1 mt-3 rounded-[10px] border border-dashed border-border-strong px-4 py-5 text-center">
+            <p className="text-[13.5px] text-text-2">No collections yet</p>
+            <p className="mt-1 text-[12.5px] text-faint">Group the requests for one API, or let an AI agent create them over MCP.</p>
+            <button type="button" className="btn-primary mt-4" onClick={() => void createCollection()}>
               <Plus size={14} /> New collection
             </button>
-            <p className="mt-3 text-[11.5px] text-faint">Or let an AI agent create them through MCP.</p>
           </div>
         )}
         {pinned.length > 0 && (
           <>
-            <SectionLabel icon={<Star size={11} className="fill-current" />} label="Pinned" />
+            <SectionLabel icon={<Star size={10} className="fill-current" />} label="Pinned" />
             {pinned.map((c) => (
-              <CollectionNode key={c.meta.id} node={c} expanded={expanded} toggle={toggle} forceOpen={forceOpen} bookmarked />
+              <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked expanded={expanded} toggle={toggle} forceOpen={forceOpen} />
             ))}
           </>
         )}
-        {others.length > 0 && pinned.length > 0 && <SectionLabel label="All collections" />}
+        {others.length > 0 && pinned.length > 0 && <SectionLabel label="Collections" />}
         {others.map((c) => (
-          <CollectionNode key={c.meta.id} node={c} expanded={expanded} toggle={toggle} forceOpen={forceOpen} bookmarked={false} />
+          <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked={false} expanded={expanded} toggle={toggle} forceOpen={forceOpen} />
         ))}
         {tree && collections.length > 0 && pinned.length + others.length === 0 && (
-          <p className="px-2 py-3 text-[12.5px] text-faint">No requests match “{query}”.</p>
+          <p className="px-2 py-3 text-[13px] text-faint">No requests match “{query}”.</p>
         )}
-      </div>
+      </nav>
     </div>
   );
 }
 
 function SectionLabel({ label, icon }: { label: string; icon?: React.ReactNode }) {
   return (
-    <div className="mt-2 mb-0.5 flex items-center gap-1.5 px-2 text-[10.5px] font-semibold tracking-wider text-faint uppercase">
+    <div className="mt-2 mb-0.5 flex items-center gap-1.5 px-2 text-[11px] font-semibold tracking-[0.06em] text-faint uppercase first:mt-1">
       {icon}
       {label}
     </div>
@@ -195,81 +216,119 @@ function groupMenu(node: GroupNode, isCollection: boolean, open: () => void): Me
   const bookmarked = s.activeEntry()?.prefs.bookmarks.includes(node.meta.id) ?? false;
   const scoped = s.activeEntry()?.prefs.scopedCollection === node.meta.id;
   const items: MenuItem[] = [
-    { label: "New request", icon: <Plus size={13} />, onSelect: () => (open(), void s.createRequest(node.meta.id)) },
-    { label: "New folder", icon: <FolderPlus size={13} />, onSelect: () => (open(), void s.createFolder(node.meta.id)) },
-    { label: isCollection ? "Run collection" : "Run folder", icon: <Play size={13} />, onSelect: () => void s.runGroup(node.meta.id) },
+    { label: "New request", icon: <Plus size={14} />, onSelect: () => (open(), void s.createRequest(node.meta.id)) },
+    { label: "New folder", icon: <FolderPlus size={14} />, onSelect: () => (open(), void s.createFolder(node.meta.id)) },
+    { label: isCollection ? "Run collection" : "Run folder", icon: <Play size={14} />, onSelect: () => void s.runGroup(node.meta.id) },
     { label: "", separator: true },
   ];
   if (isCollection) {
     items.push(
       {
-        label: bookmarked ? "Remove bookmark" : "Bookmark (pin to top)",
-        icon: <Star size={13} />,
+        label: bookmarked ? "Remove bookmark" : "Bookmark (keep on top)",
+        icon: <Star size={14} />,
         onSelect: () => void s.toggleBookmark(node.meta.id),
       },
       {
-        label: scoped ? "Show all collections" : "Scope to this collection",
-        icon: <Crosshair size={13} />,
+        label: scoped ? "Show all collections" : "Show only this collection",
+        icon: <Crosshair size={14} />,
         onSelect: () => void s.setScope(scoped ? null : node.meta.id),
       },
       { label: "", separator: true },
     );
   }
   items.push(
-    { label: "Settings, variables & scripts", icon: <Settings2 size={13} />, onSelect: () => void s.openGroup(node.meta.id) },
-    { label: "Rename", icon: <Pencil size={13} />, onSelect: () => void s.renameGroup(node.meta.id) },
-    { label: "Delete", icon: <Trash2 size={13} />, danger: true, onSelect: () => void s.deleteGroup(node.meta.id) },
+    { label: "Settings, variables and scripts", icon: <Settings2 size={14} />, onSelect: () => void s.openGroup(node.meta.id) },
+    { label: "Rename", icon: <Pencil size={14} />, onSelect: () => void s.renameGroup(node.meta.id) },
+    { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void s.deleteGroup(node.meta.id) },
   );
   return items;
 }
 
-function CollectionNode({ node, bookmarked, ...props }: NodeProps & { node: GroupNode; bookmarked: boolean }) {
+function GroupRow({
+  node,
+  depth,
+  isCollection,
+  bookmarked,
+  ...props
+}: NodeProps & { node: GroupNode; depth: number; isCollection: boolean; bookmarked: boolean }) {
   const open = props.forceOpen || props.expanded.has(node.meta.id);
-  const toggleBookmark = useStore((s) => s.toggleBookmark);
-  const setScope = useStore((s) => s.setScope);
+  const { toggleBookmark, setScope, createRequest } = useStore.getState();
   const scoped = useStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.prefs.scopedCollection === node.meta.id);
-  const ctx = useContextMenu(() => groupMenu(node, true, () => props.toggle(node.meta.id, true)));
+  const ctx = useContextMenu(() => groupMenu(node, isCollection, () => props.toggle(node.meta.id, true)));
   const count = countRequests(node.items);
 
   return (
     <div role="treeitem" aria-expanded={open} aria-selected={false}>
-      <div
-        onContextMenu={ctx.open}
-        className={cx("group flex h-8 items-center gap-1 rounded-md pr-1 pl-1 hover:bg-hover", ctx.isOpen && "bg-hover")}
-      >
-        <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => props.toggle(node.meta.id)}>
-          <ChevronRight size={14} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} />
-          {open ? <FolderOpen size={14} className="shrink-0 text-accent" /> : <Folder size={14} className="shrink-0 text-accent" />}
-          <span className="truncate font-medium">{node.meta.name}</span>
-          <span className="shrink-0 text-[11px] text-faint">{count}</span>
-        </button>
-        <button
-          title={bookmarked ? "Remove bookmark" : "Bookmark: keep this collection on top"}
-          aria-label="Bookmark"
-          aria-pressed={bookmarked}
-          onClick={() => void toggleBookmark(node.meta.id)}
-          className={cx("icon-btn h-6 w-6", bookmarked ? "text-warn" : "opacity-0 group-hover:opacity-100 focus:opacity-100")}
+      <div className="relative">
+        <Guides depth={depth} />
+        <div
+          onContextMenu={ctx.open}
+          className={cx("group flex h-[30px] items-center rounded-[7px] pr-1 hover:bg-hover", ctx.isOpen && "bg-hover")}
+          style={{ paddingLeft: 8 + depth * INDENT }}
         >
-          <Star size={13} className={bookmarked ? "fill-current" : undefined} />
-        </button>
-        <button
-          title={scoped ? "Show all collections" : "Scope to this collection (hide the others)"}
-          aria-label="Scope to this collection"
-          aria-pressed={scoped}
-          onClick={() => void setScope(scoped ? null : node.meta.id)}
-          className={cx("icon-btn h-6 w-6", scoped ? "text-accent" : "opacity-0 group-hover:opacity-100 focus:opacity-100")}
-        >
-          {scoped ? <X size={13} /> : <Crosshair size={13} />}
-        </button>
-        <MenuButton
-          items={() => groupMenu(node, true, () => props.toggle(node.meta.id, true))}
-          className="icon-btn h-6 w-6 opacity-0 group-hover:opacity-100 focus:opacity-100"
-          title="More"
-        >
-          <MoreHorizontal size={14} />
-        </MenuButton>
+          <button
+            type="button"
+            className="flex h-full min-w-0 flex-1 items-center gap-2 text-left text-[13.5px] text-text"
+            onClick={() => props.toggle(node.meta.id)}
+          >
+            <FolderIcon open={open} />
+            <span className="truncate">{node.meta.name}</span>
+          </button>
+          {isCollection && (
+            <>
+              <button
+                type="button"
+                title={bookmarked ? "Remove bookmark" : "Bookmark: keep this collection on top"}
+                aria-label={bookmarked ? `Remove bookmark from ${node.meta.name}` : `Bookmark ${node.meta.name}`}
+                aria-pressed={bookmarked}
+                onClick={() => void toggleBookmark(node.meta.id)}
+                className={cx(
+                  "flex h-6 w-6 items-center justify-center rounded-md hover:bg-selected",
+                  bookmarked ? "text-warn" : "text-faint opacity-0 group-hover:opacity-100 focus:opacity-100",
+                )}
+              >
+                <Star size={13} className={bookmarked ? "fill-current" : undefined} />
+              </button>
+              <button
+                type="button"
+                title={scoped ? "Show all collections" : "Show only this collection"}
+                aria-label={scoped ? "Show all collections" : `Show only ${node.meta.name}`}
+                aria-pressed={scoped}
+                onClick={() => void setScope(scoped ? null : node.meta.id)}
+                className={cx(
+                  "flex h-6 w-6 items-center justify-center rounded-md hover:bg-selected",
+                  scoped ? "text-accent-text" : "text-faint opacity-0 group-hover:opacity-100 focus:opacity-100",
+                )}
+              >
+                <Crosshair size={13} />
+              </button>
+            </>
+          )}
+          {!isCollection && (
+            <button
+              type="button"
+              aria-label={`New request in ${node.meta.name}`}
+              title="New request"
+              onClick={() => {
+                props.toggle(node.meta.id, true);
+                void createRequest(node.meta.id);
+              }}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-faint opacity-0 group-hover:opacity-100 hover:bg-selected focus:opacity-100"
+            >
+              <Plus size={14} />
+            </button>
+          )}
+          <MenuButton
+            items={() => groupMenu(node, isCollection, () => props.toggle(node.meta.id, true))}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-faint opacity-0 group-hover:opacity-100 hover:bg-selected focus:opacity-100"
+            title="More"
+          >
+            <MoreHorizontal size={14} />
+          </MenuButton>
+          {!open && count > 0 && <span className="w-5 text-right text-[12px] text-faint group-hover:hidden">{count}</span>}
+        </div>
       </div>
-      {open && <Items items={node.items} depth={1} {...props} />}
+      {open && <Items items={node.items} depth={depth + 1} {...props} />}
       {ctx.menu}
     </div>
   );
@@ -278,95 +337,59 @@ function CollectionNode({ node, bookmarked, ...props }: NodeProps & { node: Grou
 function Items({ items, depth, ...props }: NodeProps & { items: TreeItem[]; depth: number }) {
   if (items.length === 0) {
     return (
-      <p className="py-1 text-[12px] text-faint" style={{ paddingLeft: depth * 14 + 26 }}>
-        Empty
-      </p>
+      <div className="relative">
+        <Guides depth={depth} />
+        <p className="py-1.5 text-[12.5px] text-faint" style={{ paddingLeft: 12 + depth * INDENT }}>
+          Empty
+        </p>
+      </div>
     );
   }
   return (
-    <div role="group">
+    <div role="group" className="flex flex-col gap-px">
       {items.map((item) =>
         item.kind === "folder" ? (
-          <FolderNode key={item.meta.id} node={item} depth={depth} {...props} />
+          <GroupRow key={item.meta.id} node={item} depth={depth} isCollection={false} bookmarked={false} {...props} />
         ) : (
-          <RequestNode key={item.id} request={item} depth={depth} />
+          <RequestRow key={item.id} request={item} depth={depth} />
         ),
       )}
     </div>
   );
 }
 
-function FolderNode({ node, depth, ...props }: NodeProps & { node: GroupNode; depth: number }) {
-  const open = props.forceOpen || props.expanded.has(node.meta.id);
-  const createRequest = useStore((s) => s.createRequest);
-  const ctx = useContextMenu(() => groupMenu(node, false, () => props.toggle(node.meta.id, true)));
-  return (
-    <div role="treeitem" aria-expanded={open} aria-selected={false}>
-      <div
-        onContextMenu={ctx.open}
-        className={cx("group flex h-7 items-center gap-1 rounded-md pr-1 hover:bg-hover", ctx.isOpen && "bg-hover")}
-        style={{ paddingLeft: depth * 14 + 4 }}
-      >
-        <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => props.toggle(node.meta.id)}>
-          <ChevronRight size={13} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} />
-          {open ? <FolderOpen size={13} className="shrink-0 text-muted" /> : <Folder size={13} className="shrink-0 text-muted" />}
-          <span className="truncate">{node.meta.name}</span>
-        </button>
-        <button
-          title="New request"
-          onClick={() => {
-            props.toggle(node.meta.id, true);
-            void createRequest(node.meta.id);
-          }}
-          className="icon-btn h-6 w-6 opacity-0 group-hover:opacity-100 focus:opacity-100"
-        >
-          <Plus size={13} />
-        </button>
-        <MenuButton
-          items={() => groupMenu(node, false, () => props.toggle(node.meta.id, true))}
-          className="icon-btn h-6 w-6 opacity-0 group-hover:opacity-100 focus:opacity-100"
-          title="More"
-        >
-          <MoreHorizontal size={14} />
-        </MenuButton>
-      </div>
-      {open && <Items items={node.items} depth={depth + 1} {...props} />}
-      {ctx.menu}
-    </div>
-  );
-}
-
-function RequestNode({ request, depth }: { request: RequestSummary; depth: number }) {
+function RequestRow({ request, depth }: { request: RequestSummary; depth: number }) {
   const { active } = useWorkspaceTabs();
   const { openRequest, duplicateRequest, deleteRequest } = useStore.getState();
-  const isActive = active?.kind === "request" && active.requestId === request.id;
+  const selected = active?.kind === "request" && active.requestId === request.id;
   const ctx = useContextMenu(() => [
     { label: "Open", onSelect: () => void openRequest(request.id) },
-    { label: "Duplicate", icon: <Copy size={13} />, onSelect: () => void duplicateRequest(request.id) },
+    { label: "Duplicate", icon: <Copy size={14} />, onSelect: () => void duplicateRequest(request.id) },
     { label: "", separator: true },
-    { label: "Delete", icon: <Trash2 size={13} />, danger: true, onSelect: () => void deleteRequest(request.id) },
+    { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void deleteRequest(request.id) },
   ]);
   return (
-    <>
+    <div className="relative">
+      <Guides depth={depth} />
       <button
+        type="button"
         role="treeitem"
-        aria-selected={isActive}
+        aria-selected={selected}
         onClick={() => void openRequest(request.id)}
         onContextMenu={ctx.open}
-        title={request.url}
+        title={`${request.method} ${request.url}`}
         className={cx(
-          "flex h-7 w-full items-center gap-2 rounded-md pr-2 text-left",
-          isActive ? "bg-accent-soft text-text" : "hover:bg-hover",
+          "relative flex h-8 w-full items-center gap-2.5 rounded-[7px] pr-2 text-left text-[13.5px]",
+          selected ? "bg-selected text-text" : "text-text-2 hover:bg-hover",
           ctx.isOpen && "bg-hover",
         )}
-        style={{ paddingLeft: depth * 14 + 22 }}
+        style={{ paddingLeft: 12 + depth * INDENT }}
       >
-        <span className={cx("w-[42px] shrink-0 font-mono text-[10.5px] font-bold", methodColor(request.method))}>
-          {request.method.length > 6 ? request.method.slice(0, 6) : request.method}
-        </span>
+        {selected && <span className="absolute top-0 bottom-0 left-0 w-[3px] rounded-sm bg-accent-line" />}
+        <MethodPill method={request.method} />
         <span className="truncate">{request.name}</span>
       </button>
       {ctx.menu}
-    </>
+    </div>
   );
 }

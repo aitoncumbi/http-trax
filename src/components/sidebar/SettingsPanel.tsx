@@ -12,7 +12,7 @@ import { KeyValueEditor, makeVar } from "../editors/KeyValueEditor";
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mb-5">
-      <h3 className="mb-2 text-[11px] font-semibold tracking-wider text-faint uppercase">{title}</h3>
+      <h3 className="eyebrow mb-2.5">{title}</h3>
       {children}
     </section>
   );
@@ -25,7 +25,8 @@ export function SettingsPanel() {
   if (!entry || !tree) return null;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-3 pb-6">
-      <h2 className="mb-3 text-[11px] font-semibold tracking-wider text-faint uppercase">Workspace settings</h2>
+      <h2 className="mb-4 text-[15px] font-semibold">Settings</h2>
+      <Appearance />
       {/* Keyed so the forms re-initialise when the data changes on disk. */}
       <ManifestForm key={JSON.stringify(tree.manifest)} workspaceId={entry.id} manifest={tree.manifest} root={tree.root} />
       <SyncForm key={`${entry.id}:${JSON.stringify(entry.sync)}`} workspaceId={entry.id} initial={entry.sync} />
@@ -36,6 +37,38 @@ export function SettingsPanel() {
         <p className="font-mono text-[11px] break-all text-faint">Config: {info?.configDir}</p>
       </Section>
     </div>
+  );
+}
+
+function Appearance() {
+  const theme = useStore((s) => s.theme);
+  const layout = useStore((s) => s.layout);
+  const { toggleTheme, setLayout } = useStore.getState();
+  return (
+    <Section title="Appearance">
+      <div className="flex items-center justify-between py-1.5">
+        <span className="text-[13.5px]">Theme</span>
+        <div className="segmented">
+          <button type="button" aria-pressed={theme === "dark"} onClick={() => theme !== "dark" && toggleTheme()}>
+            Dark
+          </button>
+          <button type="button" aria-pressed={theme === "light"} onClick={() => theme !== "light" && toggleTheme()}>
+            Light
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center justify-between py-1.5">
+        <span className="text-[13.5px]">Response</span>
+        <div className="segmented">
+          <button type="button" aria-pressed={layout === "stack"} onClick={() => setLayout("stack")}>
+            Below
+          </button>
+          <button type="button" aria-pressed={layout === "side"} onClick={() => setLayout("side")}>
+            Beside
+          </button>
+        </div>
+      </div>
+    </Section>
   );
 }
 

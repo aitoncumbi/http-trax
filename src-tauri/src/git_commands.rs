@@ -302,3 +302,49 @@ pub async fn sync_statuses(state: State<'_, AppState>) -> CmdResult<HashMap<Stri
         .unwrap_or_else(|e| e.into_inner())
         .clone())
 }
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChanges {
+    pub path: String,
+    pub kind: trax_core::diff::FileKind,
+    /// Semantic description, or `None` when only a raw diff makes sense.
+    pub changes: Option<Vec<trax_core::SemanticChange>>,
+    pub diff: String,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+/// What changed in one file: a semantic summary for workspace files plus the
+/// raw unified diff.
+#[tauri::command]
+pub async fn git_file_changes(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+    staged: bool,
+) -> CmdResult<FileChanges> {
+    blocking(&state, &workspace_id, move |g| {
+        let (before, after) = g.file_versions(&path, staged)?;
+        let diff = g.diff(Some(&path), staged)?;
+        let changes = trax_core::semantic_diff(&path, before.as_deref(), after.as_deref());
+        let mut additions = 0;
+        let mut deletions = 0;
+        for line in diff.lines() {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                additions += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                deletions += 1;
+            }
+        }
+        Ok(FileChanges {
+            kind: trax_core::diff::file_kind(&path),
+            path,
+            changes,
+            diff,
+            additions,
+            deletions,
+        })
+    })
+    .await
+}

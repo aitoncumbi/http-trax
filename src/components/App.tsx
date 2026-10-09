@@ -2,29 +2,30 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { isTauri } from "@/lib/api";
 import { useStore, useWorkspaceTabs } from "@/lib/store";
 
 import { ActivityBar } from "./ActivityBar";
+import { CommandPalette } from "./CommandPalette";
+import { GitView } from "./git/GitView";
 import { MainArea } from "./main/MainArea";
+import { NoWorkspace } from "./main/Welcome";
 import { CollectionsPanel } from "./sidebar/CollectionsPanel";
 import { EnvironmentsPanel } from "./sidebar/EnvironmentsPanel";
-import { GitPanel } from "./sidebar/GitPanel";
+import { HistoryPanel } from "./sidebar/HistoryPanel";
 import { McpPanel } from "./sidebar/McpPanel";
 import { SettingsPanel } from "./sidebar/SettingsPanel";
 import { TopBar } from "./TopBar";
 import { Dialogs } from "./ui/Dialogs";
 import { Toasts } from "./ui/Toasts";
-import { NoWorkspace } from "./main/Welcome";
 
 const SIDEBAR_KEY = "http-trax.sidebar";
 
 function useSidebarWidth(): [number, (e: React.MouseEvent) => void] {
   const [width, setWidth] = useState(() => {
     try {
-      return Number(localStorage.getItem(SIDEBAR_KEY)) || 300;
+      return Number(localStorage.getItem(SIDEBAR_KEY)) || 260;
     } catch {
-      return 300;
+      return 260;
     }
   });
   const start = useRef<{ x: number; w: number } | null>(null);
@@ -59,17 +60,40 @@ function Shortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
-      if (!mod || !active) return;
-      const { saveTab, sendTab, closeTab } = useStore.getState();
-      if (e.key === "s") {
+      if (!mod) return;
+      const st = useStore.getState();
+      const key = e.key.toLowerCase();
+      if (key === "k") {
         e.preventDefault();
-        void saveTab(active.id);
+        if (st.palette) st.closePalette();
+        else st.openPalette();
+        return;
+      }
+      // Leave keys alone while a dialog or the palette has focus.
+      if (st.palette || st.dialog) return;
+      if (key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        void st.newRequestHere();
+      } else if (key === "e" && !e.shiftKey) {
+        e.preventDefault();
+        st.openPalette("environments");
+      } else if (key === "i" && e.shiftKey) {
+        e.preventDefault();
+        st.showImportDialog();
+      } else if (/^[1-9]$/.test(e.key) && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        void st.selectWorkspaceByIndex(Number(e.key) - 1);
+      } else if (!active) {
+        return;
+      } else if (key === "s") {
+        e.preventDefault();
+        void st.saveTab(active.id);
       } else if (e.key === "Enter" && active.kind === "request") {
         e.preventDefault();
-        void sendTab(active.id);
-      } else if (e.key === "w") {
+        void st.sendTab(active.id);
+      } else if (key === "w") {
         e.preventDefault();
-        void closeTab(active.id);
+        void st.closeTab(active.id);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -103,41 +127,38 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-screen flex-col bg-bg">
       <TopBar />
       <div className="flex min-h-0 flex-1">
         <ActivityBar />
         {ready && !hasWorkspace ? (
           <NoWorkspace />
+        ) : view === "git" ? (
+          <GitView key={workspaceId} />
         ) : (
           <>
-            <aside className="flex min-h-0 shrink-0 flex-col border-r border-border bg-panel" style={{ width }}>
+            <aside aria-label="Side panel" className="flex min-h-0 shrink-0 flex-col bg-panel" style={{ width }}>
               {view === "collections" && <CollectionsPanel key={workspaceId} />}
               {view === "environments" && <EnvironmentsPanel />}
-              {view === "git" && <GitPanel />}
+              {view === "history" && <HistoryPanel key={workspaceId} />}
               {view === "mcp" && <McpPanel />}
               {view === "settings" && <SettingsPanel />}
             </aside>
             <div
               role="separator"
               aria-orientation="vertical"
+              aria-label="Resize side panel"
               onMouseDown={onResize}
-              className="-ml-[3px] w-[5px] shrink-0 cursor-col-resize hover:bg-accent/40"
+              className="w-px shrink-0 cursor-col-resize bg-border outline-[3px] outline-transparent hover:bg-accent-line"
             />
-            <main className="flex min-w-0 flex-1 flex-col">
+            <main className="flex min-w-0 flex-1 flex-col bg-bg">
               <MainArea />
             </main>
           </>
         )}
       </div>
-      <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-border bg-panel px-3 text-[11px] text-faint">
-        <span>{isTauri() ? "Desktop" : "Preview mode — mock backend (run the desktop app for real requests)"}</span>
-        <span className="flex-1" />
-        <span>
-          <span className="kbd">Ctrl</span>+<span className="kbd">Enter</span> send · <span className="kbd">Ctrl</span>+<span className="kbd">S</span> save
-        </span>
-      </footer>
       <Shortcuts />
+      <CommandPalette />
       <Dialogs />
       <Toasts />
     </div>

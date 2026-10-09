@@ -4,8 +4,8 @@ import type { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { useRef, useState } from "react";
 
 import type { Scripts } from "@/lib/types";
+import { cx } from "@/lib/util";
 
-import { TabStrip } from "../ui/Segmented";
 import { CodeEditor } from "./CodeEditor";
 
 type Phase = "preRequest" | "postResponse";
@@ -59,19 +59,32 @@ export function ScriptsEditor({
     }
   };
 
+  const phases: { id: Phase; label: string; filled: boolean }[] = [
+    { id: "preRequest", label: "Pre-request", filled: !!scripts.preRequest?.trim() },
+    { id: "postResponse", label: "Post-response (tests)", filled: !!scripts.postResponse?.trim() },
+  ];
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TabStrip<Phase>
-        tabs={[
-          { id: "preRequest", label: "Pre-request", badge: scripts.preRequest?.trim() ? "●" : undefined },
-          { id: "postResponse", label: "Post-response (tests)", badge: scripts.postResponse?.trim() ? "●" : undefined },
-        ]}
-        value={phase}
-        onChange={setPhase}
-        className="border-b-0"
-      />
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_220px] border-t border-border">
-        <div className="min-h-0 overflow-auto">
+      <div role="tablist" aria-label="Script phase" className="flex h-[42px] shrink-0 items-stretch gap-5 border-b border-border-soft px-5">
+        {phases.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="tab"
+            aria-selected={phase === p.id}
+            onClick={() => setPhase(p.id)}
+            className={cx(
+              "-mb-px inline-flex items-center gap-2 border-b-2 text-[13.5px]",
+              phase === p.id ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
+            )}
+          >
+            {p.label}
+            <span className={cx("h-1.5 w-1.5 rounded-full", p.filled ? "bg-faint" : "bg-transparent")} aria-hidden />
+          </button>
+        ))}
+      </div>
+      <div className="flex min-h-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 overflow-auto">
           <CodeEditor
             key={phase}
             ref={ref}
@@ -81,20 +94,23 @@ export function ScriptsEditor({
             placeholder={phase === "preRequest" ? "// e.g. trax.request.headers.set('X-Trace', trax.uuid())" : "// e.g. trax.test('ok', () => trax.expect(trax.response.status).toBe(200))"}
           />
         </div>
-        <aside className="min-h-0 overflow-y-auto border-l border-border p-3">
-          <p className="mb-2 text-[11.5px] leading-relaxed text-faint">{HELP[phase]}</p>
-          {scopeNote && <p className="mb-2 text-[11.5px] leading-relaxed text-faint">{scopeNote}</p>}
-          <div className="label mt-3">Snippets</div>
-          <div className="flex flex-col gap-0.5">
-            {SNIPPETS[phase].map((s) => (
-              <button key={s.label} className="rounded px-2 py-1 text-left text-[12px] text-accent hover:bg-hover" onClick={() => insert(s.code)}>
-                {s.label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-3 text-[11px] leading-relaxed text-faint">
-            Also available: <code className="font-mono">pm.*</code> for Postman scripts, <code className="font-mono">expect(x).to.equal(y)</code>,{" "}
-            <code className="font-mono">await</code>, <code className="font-mono">btoa/atob</code>.
+        <aside aria-label="Script help" className="w-[224px] shrink-0 overflow-y-auto border-l border-border bg-rail px-[18px] py-4 text-[12.5px] leading-[18px] text-faint">
+          <p>{HELP[phase]}</p>
+          <p className="mt-2.5">{scopeNote ?? "Collection and folder scripts run first."}</p>
+          <div className="mt-[18px] mb-2 text-[11px] font-semibold tracking-[0.06em]">SNIPPETS</div>
+          {SNIPPETS[phase].map((s) => (
+            <button
+              key={s.label}
+              type="button"
+              className="block h-[30px] w-full rounded-md text-left text-[13px] text-accent-text hover:text-accent-text-2"
+              onClick={() => insert(s.code)}
+            >
+              {s.label}
+            </button>
+          ))}
+          <p className="mt-3 text-[11.5px] leading-[17px]">
+            Postman-style <code className="font-mono">pm.*</code>, <code className="font-mono">expect(x).to.equal(y)</code>,{" "}
+            <code className="font-mono">await</code> and <code className="font-mono">btoa</code> also work.
           </p>
         </aside>
       </div>

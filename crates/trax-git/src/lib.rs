@@ -650,6 +650,37 @@ impl Git {
         Ok(diff)
     }
 
+    /// Contents of `path` (relative to the repo root) on both sides of a change:
+    /// staged = HEAD → index, otherwise index → working tree. `None` where the
+    /// file doesn't exist on that side (added or deleted).
+    pub fn file_versions(
+        &self,
+        path: &str,
+        staged: bool,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let root = self.toplevel()?;
+        let root_s = root.to_string_lossy().into_owned();
+        let show = |spec: String| -> Option<String> {
+            run_git(
+                &self.dir,
+                &["-C", &root_s, "show", &spec],
+                &self.opts(LOCAL),
+            )
+            .ok()
+            .map(|o| o.stdout)
+        };
+        if staged {
+            Ok((show(format!("HEAD:{path}")), show(format!(":{path}"))))
+        } else {
+            // Untracked files have no index version.
+            let before = show(format!(":{path}"));
+            let after = std::fs::read(root.join(path))
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).into_owned());
+            Ok((before, after))
+        }
+    }
+
     /// Diff of a single commit against its first parent.
     pub fn show(&self, commit: &str) -> Result<String> {
         self.git(&["show", "--no-color", "--format=fuller", commit])

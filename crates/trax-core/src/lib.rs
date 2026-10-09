@@ -5,8 +5,10 @@
 //! layers over this crate, so anything an AI agent does through MCP shows up
 //! in the app and vice versa.
 
+pub mod diff;
 pub mod error;
 pub mod fsutil;
+pub mod history;
 pub mod http;
 pub mod interpolate;
 pub mod model;
@@ -14,7 +16,9 @@ pub mod registry;
 pub mod runner;
 pub mod workspace;
 
+pub use diff::{semantic_diff, ChangeKind, SemanticChange};
 pub use error::{Error, Result};
+pub use history::HistoryEntry;
 pub use model::*;
 pub use registry::{Registry, SyncSettings, WorkspaceEntry, WorkspacePrefs};
 pub use runner::{run_draft, run_group, run_saved, save_run_response, RunOptions};

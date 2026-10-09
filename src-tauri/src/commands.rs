@@ -546,3 +546,18 @@ pub async fn inspect_path(path: String) -> CmdResult<String> {
     }
     .into())
 }
+
+// ----------------------------------------------------------------- history
+
+#[tauri::command]
+pub async fn get_history(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Vec<HistoryEntry>> {
+    state.workspace(&workspace_id)?.history().str_err()
+}
+
+#[tauri::command]
+pub async fn clear_history(state: State<'_, AppState>, workspace_id: String) -> CmdResult<()> {
+    state.workspace(&workspace_id)?.clear_history().str_err()
+}

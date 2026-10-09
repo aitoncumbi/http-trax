@@ -181,11 +181,19 @@ Decisions:
 
 ## UI
 
-- **Layout:** top bar (workspace switcher grouped by team, environment picker, sync status), activity bar (Collections, Environments, Source control, AI agents, Settings), resizable sidebar, tabbed main area (requests, collection/folder settings, environments, collection runs, reviews, diffs). Request and response panes are split with a draggable divider.
+The interface follows the "Courion" design (dark first, quiet chrome, one accent colour). Only the UI carries that name for now: the window title, logo and wordmark. Binaries, installers, the MCP server and the `trax.*` script API keep the http-trax name.
+
+- **Frame:** the window is frameless (`decorations: false`). The 40px toolbar is the title bar: logo, workspace switcher, New, Import, environment picker, sync status, search, and window controls drawn by the app. Empty toolbar space drags the window. On Linux, resizing a frameless window depends on the window manager; if that turns out to be unreliable, native decorations come back.
+- **Layout:** a 46px icon rail (Collections, Environments, History, Source control, AI agents, Settings), a resizable side panel, and the main area with tabs (requests, collection and folder settings, environments, runs, reviews). Requests show a breadcrumb, the URL bar (method, URL with highlighted `{{variables}}`, Send, Save), request sections (Query params, Body, Headers, Authorization, Scripts, Settings, Docs) and the response (Body, Headers, Tests, Console, Request, Saved). The response sits below or beside the request; the choice is remembered.
+- **Source control** is a full-width view rather than a side panel, because reviewing changes needs room: changed files with stage checkboxes and the commit box on the left, the selected change in the middle, history on the right. Branch switching, creating, merging, comparing and opening a pull request live in one branch menu.
+- **Readable diffs.** For workspace files the middle column shows semantic changes by default ("URL changed", "Header added", "Body updated · currency", "Test added", "Variable updated"), computed by `trax_core::diff::semantic_diff` from the before and after YAML. Secrets show as "secret · not synced". Raw shows the line diff with old and new line numbers. Files that aren't workspace YAML, and conflicted files, show the line diff only.
+- **History** lists recent runs (from the app and from agents through MCP) grouped by day. It is local to the machine (`.trax/history.json`, last 300 runs) and never committed.
+- **Command palette** (Ctrl/Cmd+K) searches requests by name, URL and path, lists recent runs, and runs commands (new request, switch workspace or environment, import from cURL, sync, run a collection, toggle layout and theme). **Import from cURL** turns a pasted command into a request (method, headers, body, basic and bearer auth).
 - **Bookmarks** pin collections to a "Pinned" section at the top of the tree, in the order they were pinned. **Scope** shows only one collection and hides the others until "Show all". Both are per-user, per-workspace preferences stored in the registry.
 - **State:** a single Zustand store (`src/lib/store.ts`). Tabs are kept per workspace, so switching teams and back restores your tabs. Dirty state is a comparison of the draft with the last saved snapshot.
-- **Theme:** design tokens as CSS variables mapped into Tailwind v4's theme; dark by default, light available. CodeMirror 6 for editors.
-- **Keyboard:** Ctrl/Cmd+Enter send, Ctrl/Cmd+S save, Ctrl/Cmd+W close tab.
+- **Theme:** design tokens as CSS variables (`src/app/globals.css`) mapped into Tailwind v4's theme; dark by default, light derived from the same tokens. Schibsted Grotesk for the interface and JetBrains Mono for code, bundled with the app (no font requests at runtime). CodeMirror 6 for editors, with a highlight style that uses the same tokens.
+- **Environment colours** are a convention, not a setting: names containing "prod" are red, "staging", "qa", "test" and similar amber, "local" and "dev" green, anything else blue.
+- **Keyboard:** Ctrl/Cmd+K search, Ctrl/Cmd+N new request, Ctrl/Cmd+E environments, Ctrl/Cmd+Shift+I import from cURL, Ctrl/Cmd+1–9 switch workspace, Ctrl/Cmd+Enter send, Ctrl/Cmd+S save, Ctrl/Cmd+W close tab.
 
 ## Security notes
 
@@ -199,7 +207,7 @@ Decisions:
 
 - Rust unit and integration tests: the script sandbox, workspace storage, the runner against a local mock HTTP server (`wiremock`), git operations against real temporary repositories (two clones of a bare remote simulate teammates, including conflicts and auto-pull), and an end-to-end MCP session in which an "agent" builds and runs a suite.
 - Frontend: ESLint (Next.js core-web-vitals + TypeScript rules, React Compiler checks), `tsc --noEmit`, and a production build.
-- GitHub Actions: `ci.yml` runs frontend checks, Rust fmt/clippy/tests on Linux and Windows, then builds the desktop app and installers on both (Linux: .deb, .rpm, AppImage; Windows: .msi and NSIS setup) and uploads them with standalone `trax-mcp` binaries. `release.yml` builds the same on a `v*` tag and attaches everything to a draft GitHub release.
+- GitHub Actions: `ci.yml` runs frontend checks, Rust fmt/clippy/tests on Linux and Windows, then builds the desktop app and installers on both (Linux: .deb, .rpm, AppImage; Windows: .msi and NSIS setup) and uploads them with standalone `trax-mcp` binaries. `release.yml` builds the same on a `v*` tag and publishes everything on that tag's GitHub release (a pre-release when the tag has a suffix such as `-beta.1`).
 
 ## Known trade-offs
 

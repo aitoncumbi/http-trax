@@ -10,7 +10,9 @@ import type {
   CollectionRun,
   Commit,
   Environment,
+  FileChanges,
   GroupMeta,
+  HistoryEntry,
   GroupNode,
   Identity,
   LocalState,
@@ -108,7 +110,13 @@ export const api = {
   deleteSavedResponse: (workspaceId: string, requestId: string, responseId: string) =>
     call<void>("delete_saved_response", { workspaceId, requestId, responseId }),
 
+  // history
+  getHistory: (workspaceId: string) => call<HistoryEntry[]>("get_history", { workspaceId }),
+  clearHistory: (workspaceId: string) => call<void>("clear_history", { workspaceId }),
+
   // git
+  gitFileChanges: (workspaceId: string, path: string, staged: boolean) =>
+    call<FileChanges>("git_file_changes", { workspaceId, path, staged }),
   gitStatus: (workspaceId: string) => call<RepoStatus>("git_status", { workspaceId }),
   gitInit: (workspaceId: string) => call<void>("git_init", { workspaceId }),
   gitStage: (workspaceId: string, paths: string[]) => call<void>("git_stage", { workspaceId, paths }),
@@ -171,6 +179,16 @@ export async function pickDirectory(title: string): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({ directory: true, multiple: false, title });
   return typeof picked === "string" ? picked : null;
+}
+
+/** Window controls for the custom title bar (no-ops in the browser preview). */
+export async function windowAction(action: "minimize" | "toggleMaximize" | "close"): Promise<void> {
+  if (!isTauri()) return;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const w = getCurrentWindow();
+  if (action === "minimize") await w.minimize();
+  else if (action === "toggleMaximize") await w.toggleMaximize();
+  else await w.close();
 }
 
 export async function openExternal(url: string): Promise<void> {

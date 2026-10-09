@@ -255,3 +255,22 @@ fn identity_and_remotes() {
         "https://github.com/acme/api/compare/main...feature/x?expand=1"
     );
 }
+
+#[test]
+fn file_versions_for_staged_and_unstaged() {
+    let (_root, alice, _bob) = team();
+    write(&alice, "api.req.yaml", "name: get\nurl: /v2\n");
+    let (before, after) = alice.file_versions("api.req.yaml", false).unwrap();
+    assert_eq!(before.as_deref(), Some("name: get\nurl: /v1\n"));
+    assert!(after.unwrap().contains("/v2"));
+
+    alice.stage(&["api.req.yaml".into()]).unwrap();
+    let (before, after) = alice.file_versions("api.req.yaml", true).unwrap();
+    assert!(before.unwrap().contains("/v1"));
+    assert!(after.unwrap().contains("/v2"));
+
+    write(&alice, "new.req.yaml", "name: new\n");
+    let (before, after) = alice.file_versions("new.req.yaml", false).unwrap();
+    assert!(before.is_none());
+    assert_eq!(after.as_deref(), Some("name: new\n"));
+}

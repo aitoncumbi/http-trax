@@ -4,8 +4,12 @@ import { FolderOpen, GitBranch, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api, errorMessage, isTauri, pickDirectory } from "@/lib/api";
+import { parseCurl } from "@/lib/curl";
 import { useStore } from "@/lib/store";
-import { cx } from "@/lib/util";
+import type { GroupNode, TreeItem } from "@/lib/types";
+import { cx, findChain } from "@/lib/util";
+
+import { MethodPill } from "./Brand";
 
 export function Modal({
   title,
@@ -25,17 +29,17 @@ export function Modal({
   }, [onClose]);
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh] backdrop-blur-[1px]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--scrim)] pt-[12vh] backdrop-blur-[4px]"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="max-w-[92vw] rounded-xl border border-border-strong bg-panel shadow-[var(--shadow)]"
+        className="max-w-[calc(100vw-32px)] overflow-hidden rounded-[14px] border border-border-strong bg-elev shadow-[var(--shadow)]"
         style={{ width }}
       >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-[14px] font-semibold">{title}</h2>
+        <div className="flex h-[52px] items-center justify-between border-b border-border pr-3 pl-5">
+          <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             <X size={15} />
           </button>
@@ -68,7 +72,7 @@ function PromptDialog({
   return (
     <Modal title={title} onClose={() => resolve(null)}>
       <form
-        className="p-4"
+        className="p-5"
         onSubmit={(e) => {
           e.preventDefault();
           if (value.trim()) resolve(value.trim());
@@ -104,8 +108,8 @@ function ConfirmDialog({
 }) {
   return (
     <Modal title={title} onClose={() => resolve(false)}>
-      <div className="p-4">
-        <p className="text-[13px] leading-relaxed text-muted">{message}</p>
+      <div className="p-5">
+        <p className="text-[13.5px] leading-relaxed whitespace-pre-wrap text-muted">{message}</p>
         <div className="mt-5 flex justify-end gap-2">
           <button className="btn" onClick={() => resolve(false)}>
             Cancel
@@ -185,14 +189,14 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
 
   return (
     <Modal title="Workspaces" onClose={close} width={520}>
-      <div className="flex gap-1 border-b border-border px-3 pt-2">
+      <div className="flex gap-1 border-b border-border px-4">
         {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setMode(t.id)}
             className={cx(
-              "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[12.5px]",
-              mode === t.id ? "border-accent text-text" : "border-transparent text-muted hover:text-text",
+              "-mb-px flex h-10 items-center gap-1.5 border-b-2 px-3 text-[13px]",
+              mode === t.id ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
             )}
           >
             {t.icon}
@@ -200,7 +204,7 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
           </button>
         ))}
       </div>
-      <form onSubmit={submit} className="space-y-3 p-4">
+      <form onSubmit={submit} className="space-y-4 p-5">
         {mode === "create" && (
           <>
             <p className="text-[12.5px] text-muted">
@@ -275,6 +279,117 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
   );
 }
 
+function groupOptions(collections: GroupNode[]): { id: string; label: string }[] {
+  const out: { id: string; label: string }[] = [];
+  const walk = (node: GroupNode, trail: string[]) => {
+    const here = [...trail, node.meta.name];
+    out.push({ id: node.meta.id, label: here.join(" / ") });
+    node.items.forEach((i: TreeItem) => i.kind === "folder" && walk(i, here));
+  };
+  collections.forEach((c) => walk(c, []));
+  return out;
+}
+
+function ImportDialog() {
+  const close = useStore((s) => s.closeDialog);
+  const tree = useStore((s) => s.tree);
+  const activeTab = useStore((s) => s.tabs.find((t) => t.id === (s.activeWorkspaceId ? s.activeTab[s.activeWorkspaceId] : null)));
+  const importRequest = useStore((s) => s.importRequest);
+  const options = groupOptions(tree?.collections ?? []);
+  const defaultParent = (() => {
+    if (activeTab?.kind === "request") {
+      const chain = findChain(tree?.collections ?? [], activeTab.requestId);
+      if (chain?.length) return chain[chain.length - 1].meta.id;
+    }
+    return options[0]?.id ?? "";
+  })();
+  const [text, setText] = useState("");
+  const [parent, setParent] = useState(defaultParent);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  let preview: ReturnType<typeof parseCurl> | null = null;
+  let error: string | null = null;
+  if (text.trim()) {
+    try {
+      preview = parseCurl(text);
+    } catch (e) {
+      error = errorMessage(e);
+    }
+  }
+
+  return (
+    <Modal title="Import from cURL" onClose={close} width={620}>
+      <form
+        className="space-y-4 p-5"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!preview || !parent) return;
+          setBusy(true);
+          const request = { ...preview.request, name: name.trim() || preview.request.name };
+          close();
+          await importRequest(parent, request);
+        }}
+      >
+        <div>
+          <label htmlFor="curl-text" className="label">
+            Paste a cURL command
+          </label>
+          <textarea
+            id="curl-text"
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            spellCheck={false}
+            placeholder={"curl -X POST https://api.example.com/v1/orders \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"sku\": \"TRX-001\"}'"}
+            className="input h-36 resize-none py-2.5 font-mono text-[12.5px] leading-[19px]"
+          />
+        </div>
+        {preview && (
+          <div className="flex items-center gap-3 rounded-lg border border-border-mid px-3 py-2.5">
+            <MethodPill method={preview.request.method} />
+            <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text-2">{preview.request.url}</span>
+            <span className="text-[12px] text-faint">
+              {(preview.request.headers ?? []).length} headers · {preview.request.body?.mode === "none" ? "no body" : preview.request.body?.mode}
+            </span>
+          </div>
+        )}
+        {preview && preview.warnings.length > 0 && <p className="text-[12.5px] text-warn">{preview.warnings.join(", ")} (not supported).</p>}
+        {error && <p className="text-[12.5px] text-danger">{error}</p>}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="curl-name" className="label">
+              Name
+            </label>
+            <input id="curl-name" className="input" value={name} placeholder={preview?.request.name ?? "Request name"} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="curl-parent" className="label">
+              Save to
+            </label>
+            <select id="curl-parent" className="input" value={parent} onChange={(e) => setParent(e.target.value)}>
+              {options.length === 0 && <option value="">Create a collection first</option>}
+              {options.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn" onClick={close}>
+            Cancel
+          </button>
+          <button type="submit" className="btn-primary" disabled={!preview || !parent || busy}>
+            Import request
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
   if (!dialog) return null;
@@ -285,5 +400,7 @@ export function Dialogs() {
       return <ConfirmDialog {...dialog} />;
     case "workspace":
       return <WorkspaceDialog mode={dialog.mode} />;
+    case "import":
+      return <ImportDialog />;
   }
 }

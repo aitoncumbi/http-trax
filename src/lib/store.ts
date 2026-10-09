@@ -82,7 +82,11 @@ export interface DiffTab extends TabBase {
 
 export type Tab = RequestTab | GroupTab | EnvironmentTab | RunnerTab | ReviewTab | DiffTab;
 
-export type View = "collections" | "environments" | "git" | "mcp" | "settings";
+export type View = "collections" | "environments" | "history" | "git" | "mcp" | "settings";
+
+export type PaneLayout = "stack" | "side";
+
+export type PaletteMode = "search" | "workspaces" | "environments";
 
 export interface Toast {
   id: string;
@@ -93,7 +97,8 @@ export interface Toast {
 export type Dialog =
   | { kind: "prompt"; title: string; label?: string; initial?: string; confirm?: string; resolve: (v: string | null) => void }
   | { kind: "confirm"; title: string; message: string; confirm?: string; danger?: boolean; resolve: (v: boolean) => void }
-  | { kind: "workspace"; mode: "create" | "open" | "clone" };
+  | { kind: "workspace"; mode: "create" | "open" | "clone" }
+  | { kind: "import" };
 
 export function tabDirty(tab: Tab): boolean {
   switch (tab.kind) {
@@ -122,7 +127,11 @@ interface State {
   dialog: Dialog | null;
   /** Bumped whenever git state may have changed (events, own actions). */
   gitEpoch: number;
+  /** Bumped after runs so the History panel reloads. */
+  historyEpoch: number;
   theme: "dark" | "light";
+  layout: PaneLayout;
+  palette: PaletteMode | null;
 }
 
 interface Actions {
@@ -169,18 +178,36 @@ interface Actions {
   syncNow: () => Promise<void>;
   onWorkspaceChanged: (workspaceId: string) => Promise<void>;
   bumpGit: () => void;
+  setLayout: (layout: PaneLayout) => void;
+  openPalette: (mode?: PaletteMode) => void;
+  closePalette: () => void;
+  /** New request next to the open one (or in the first collection). */
+  newRequestHere: () => Promise<void>;
+  /** Import a request into a collection or folder and open it. */
+  importRequest: (parentId: string, request: Request) => Promise<void>;
+  selectWorkspaceByIndex: (index: number) => Promise<void>;
 
   toast: (kind: Toast["kind"], message: string) => void;
   dismissToast: (id: string) => void;
   prompt: (opts: { title: string; label?: string; initial?: string; confirm?: string }) => Promise<string | null>;
   confirm: (opts: { title: string; message: string; confirm?: string; danger?: boolean }) => Promise<boolean>;
   showWorkspaceDialog: (mode: "create" | "open" | "clone") => void;
+  showImportDialog: () => void;
   closeDialog: () => void;
 }
 
 export type Store = State & Actions;
 
 const THEME_KEY = "http-trax.theme";
+const LAYOUT_KEY = "http-trax.layout";
+
+function readLayout(): PaneLayout {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === "side" ? "side" : "stack";
+  } catch {
+    return "stack";
+  }
+}
 
 function readTheme(): "dark" | "light" {
   try {
@@ -199,8 +226,11 @@ export const useStore = create<Store>()((set, get) => {
   const fail = (e: unknown) => get().toast("error", errorMessage(e));
   const wsId = () => get().activeWorkspaceId;
 
+  // The source control view covers the editor, so showing a tab leaves it.
+  const editorView = (view: View): View => (view === "git" ? "collections" : view);
+
   const pushTab = (tab: Tab) =>
-    set((s) => ({ tabs: [...s.tabs, tab], activeTab: { ...s.activeTab, [tab.workspaceId]: tab.id } }));
+    set((s) => ({ tabs: [...s.tabs, tab], activeTab: { ...s.activeTab, [tab.workspaceId]: tab.id }, view: editorView(s.view) }));
 
   const findTab = (pred: (t: Tab) => boolean) => get().tabs.find(pred);
 
@@ -230,12 +260,15 @@ export const useStore = create<Store>()((set, get) => {
     toasts: [],
     dialog: null,
     gitEpoch: 0,
+    historyEpoch: 0,
     theme: "dark",
+    layout: "stack",
+    palette: null,
 
     init: async () => {
       const theme = readTheme();
       document.documentElement.dataset.theme = theme;
-      set({ theme });
+      set({ theme, layout: readLayout() });
       try {
         const [info] = await Promise.all([api.appInfo(), get().refreshWorkspaces()]);
         set({ info });
@@ -517,7 +550,7 @@ export const useStore = create<Store>()((set, get) => {
 
     focusTab: (tabId) => {
       const tab = findTab((t) => t.id === tabId);
-      if (tab) set((s) => ({ activeTab: { ...s.activeTab, [tab.workspaceId]: tabId } }));
+      if (tab) set((s) => ({ activeTab: { ...s.activeTab, [tab.workspaceId]: tabId }, view: editorView(s.view) }));
     },
 
     closeTab: async (tabId) => {
@@ -570,6 +603,7 @@ export const useStore = create<Store>()((set, get) => {
       try {
         const result = await api.sendRequest(tab.workspaceId, tab.draft, null, env);
         get().updateTab<RequestTab>(tabId, (t) => ({ ...t, result, running: false }));
+        set((st) => ({ historyEpoch: st.historyEpoch + 1 }));
         // Scripts may have changed environment values.
         void get().reloadTree();
       } catch (e) {
@@ -642,6 +676,7 @@ export const useStore = create<Store>()((set, get) => {
       try {
         const run = await api.runCollection(tab.workspaceId, tab.groupId, tab.environmentId, false);
         get().updateTab<RunnerTab>(tabId, (t) => ({ ...t, run, running: false }));
+        set((st) => ({ historyEpoch: st.historyEpoch + 1 }));
         void get().reloadTree();
       } catch (e) {
         get().updateTab<RunnerTab>(tabId, (t) => ({ ...t, running: false, error: errorMessage(e) }));
@@ -713,6 +748,64 @@ export const useStore = create<Store>()((set, get) => {
 
     bumpGit: () => set((s) => ({ gitEpoch: s.gitEpoch + 1 })),
 
+    setLayout: (layout) => {
+      try {
+        localStorage.setItem(LAYOUT_KEY, layout);
+      } catch {
+        // storage unavailable
+      }
+      set({ layout });
+    },
+
+    openPalette: (mode = "search") => set({ palette: mode }),
+    closePalette: () => set({ palette: null }),
+
+    newRequestHere: async () => {
+      const id = wsId();
+      const tree = get().tree;
+      if (!id || !tree) return;
+      const tab = get().tabs.find((t) => t.id === get().activeTab[id]);
+      let parentId: string | null = null;
+      if (tab?.kind === "request") {
+        const chain = findChain(tree.collections, tab.requestId);
+        parentId = chain?.[chain.length - 1]?.meta.id ?? null;
+      } else if (tab?.kind === "group") {
+        parentId = tab.groupId;
+      }
+      if (!parentId) {
+        const scoped = get().activeEntry()?.prefs.scopedCollection;
+        parentId = scoped ?? tree.collections[0]?.meta.id ?? null;
+      }
+      try {
+        if (!parentId) {
+          parentId = (await api.createCollection(id, "Requests")).meta.id;
+        }
+        get().setView("collections");
+        await get().createRequest(parentId);
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    importRequest: async (parentId, request) => {
+      const id = wsId();
+      if (!id) return;
+      try {
+        const created = await api.createRequest(id, parentId, request);
+        await get().reloadTree();
+        get().setView("collections");
+        await get().openRequest(created.id);
+        get().toast("success", `Imported "${created.name}"`);
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    selectWorkspaceByIndex: async (index) => {
+      const w = get().workspaces[index];
+      if (w && w.id !== wsId()) await get().selectWorkspace(w.id);
+    },
+
     toast: (kind, message) => {
       const id = uid();
       set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, message }] }));
@@ -750,6 +843,7 @@ export const useStore = create<Store>()((set, get) => {
       ),
 
     showWorkspaceDialog: (mode) => set({ dialog: { kind: "workspace", mode } }),
+    showImportDialog: () => set({ dialog: { kind: "import" } }),
 
     closeDialog: () => set({ dialog: null }),
   };

@@ -8,7 +8,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [x] Rust workspace: `trax-core`, `trax-script`, `trax-git`, `trax-mcp`, Tauri 2 app
 - [x] Next.js (static export) + Tailwind UI, dark and light themes
 - [x] GitHub Actions CI on Linux and Windows: lint, typecheck, clippy, tests, installers (.deb, .rpm, AppImage, .msi, NSIS)
-- [x] Tag-triggered release workflow publishing installers and standalone `trax-mcp` binaries to a draft release
+- [x] Tag-triggered release workflow publishing installers and standalone `trax-mcp` binaries
 - [x] Browser preview mode with a mock backend for UI work
 
 **Workspaces and collections**
@@ -52,16 +52,28 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [x] Tools to create workspaces, environments, collections and requests with tests, run requests and collections, send ad-hoc requests, and read saved responses
 - [x] In-app setup panel with configs for Claude Code, Claude Desktop/Cursor and VS Code
 
+## Phase 0.2 — Courion interface ✅
+
+- [x] New interface design: frameless window with an app-drawn toolbar, icon rail, quieter tree with pinned section, bordered parameter tables with descriptions, `{{variable}}` highlighting in inputs
+- [x] Response below or beside the request, remembered per machine
+- [x] Workspace switcher with team avatars and Ctrl+1–9
+- [x] Command palette (Ctrl+K): requests, recent runs, commands, environment and workspace switching
+- [x] Import a request from a cURL command
+- [x] Local run history (app and MCP runs), grouped by day
+- [x] Full-width source control view with semantic "what changed" diffs for requests and environments, raw diffs with line numbers, commit history and a searchable branch menu
+
 ## Phase 1 — Daily-driver polish
 
-- [ ] Import: Postman collection v2.1 and environments, Insomnia, Bruno, OpenAPI 3.x, HAR, cURL
+- [ ] Import: Postman collection v2.1 and environments, Insomnia, Bruno, OpenAPI 3.x, HAR (single cURL commands are done)
 - [ ] Export: cURL and code snippets (fetch, axios, Python requests, Go, Rust)
-- [ ] Request history (local, searchable) with "restore as request"
+- [ ] Search history and "restore as request"
 - [ ] Cookie jar per workspace, with an editor
 - [ ] Drag and drop to reorder and move requests and folders
 - [ ] Variable autocomplete and hover-to-preview resolved values in the URL bar and editors
 - [ ] Response tools: search, JSONPath/JMESPath filter, word wrap toggle, save body to file, large-response virtualization
-- [ ] Command palette and configurable keyboard shortcuts
+- [ ] Configurable keyboard shortcuts
+- [ ] Protected environments: confirm before sending to an environment marked protected (for example production)
+- [ ] Finish the Courion rename: installers, binaries, MCP server name, and a `courion.*` alias for the script API
 - [ ] Proxy settings, custom CA certificates, client certificates (mTLS)
 - [ ] More auth: OAuth 2.0 (authorization code + PKCE, client credentials, device code) with token refresh, Digest, AWS SigV4, NTLM
 - [ ] Tighten the webview CSP

@@ -39,7 +39,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
           {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="overflow-x-auto rounded-md border border-border bg-panel-2 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre text-text">
+      <pre className="overflow-x-auto rounded-lg border border-border-mid bg-sunken p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre text-text-2">
         {text}
       </pre>
     </div>
@@ -67,9 +67,9 @@ export function McpPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pt-3 pb-6">
-      <h2 className="mb-3 text-[11px] font-semibold tracking-wider text-faint uppercase">AI agents (MCP)</h2>
-      <div className="mb-4 flex gap-2.5 rounded-lg border border-border bg-panel-2 p-3">
-        <Bot size={18} className="mt-0.5 shrink-0 text-accent" />
+      <h2 className="mb-3 text-[15px] font-semibold">AI agents</h2>
+      <div className="mb-4 flex gap-2.5 rounded-[10px] border border-border-mid p-3">
+        <Bot size={18} className="mt-0.5 shrink-0 text-accent-text" />
         <p className="text-[12.5px] leading-relaxed text-muted">
           After an agent builds or changes a service, it can register the endpoints here, attach tests and run them. Everything it creates is
           plain YAML in this workspace, so it shows up in this window right away and you review it in git like any other change.
@@ -92,11 +92,11 @@ export function McpPanel() {
         environment you select in the top bar.
       </p>
 
-      <h3 className="mt-3 mb-1.5 text-[11px] font-semibold tracking-wider text-faint uppercase">Tools</h3>
+      <h3 className="eyebrow mt-3 mb-1.5">Tools</h3>
       <ul className="space-y-1">
         {TOOLS.map(([name, desc]) => (
           <li key={name} className="text-[12px]">
-            <code className="font-mono text-accent">{name}</code> <span className="text-muted">— {desc}</span>
+            <code className="font-mono text-accent-text">{name}</code> <span className="text-muted">— {desc}</span>
           </li>
         ))}
       </ul>
