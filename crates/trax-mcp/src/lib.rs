@@ -18,6 +18,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+use trax_core::agents::{self, ActivityKind, AgentActivity, AgentSession};
 
 pub use tools::tool_definitions;
 
@@ -32,14 +33,18 @@ The developer sees everything you create here live in the http-trax desktop app.
 
 Typical loop after you build or change an HTTP service:
 1. `init_workspace` in the service repo (e.g. ./api-tests) or pick one from `list_workspaces`.
-2. `upsert_environment` with the base URL (e.g. baseUrl=http://localhost:8080) and other settings.
+2. `upsert_collection` with variables for the base URL (e.g. baseUrl=http://localhost:8080).    Environments (Local, Staging...) override collection variables; `upsert_environment` only works    when the user allows agents to edit environments.
 3. `upsert_request` for each endpoint. Use {{variables}} in url/headers/body and put assertions \
    in `scripts.postResponse`, e.g. `trax.test('201', () => trax.expect(trax.response.status).toBe(201));`.
    Chain requests by saving values: `trax.env.set('userId', trax.response.json().id)`.
 4. `run_collection` (or `run_request`) and fix the service until every test passes.
 5. Optionally keep a known-good response with `run_request` + `save_response_as`.
 
-Use `send_http_request` for one-off calls you don't want to keep.";
+Use `send_http_request` for one-off calls you don't want to keep.
+
+The user decides in the app what agents may do (edit requests, run them, read responses, edit \
+environments, read secrets). A refused call says which setting to ask the user about. Requests \
+never run against an environment the user marked protected.";
 
 /// Server configuration (from the command line).
 #[derive(Debug, Clone, Default)]
@@ -58,6 +63,8 @@ pub struct Server {
     /// cycles; clients may issue them in parallel, so run them one at a time.
     /// Pings and listings stay responsive.
     tool_lock: tokio::sync::Mutex<()>,
+    /// This process's session, once the client has said who it is.
+    session: std::sync::Mutex<Option<AgentSession>>,
 }
 
 impl Server {
@@ -65,7 +72,69 @@ impl Server {
         Arc::new(Self {
             config,
             tool_lock: tokio::sync::Mutex::new(()),
+            session: std::sync::Mutex::new(None),
         })
+    }
+
+    pub(crate) fn registry_dir(&self) -> PathBuf {
+        self.config
+            .home
+            .clone()
+            .unwrap_or_else(trax_core::Registry::default_dir)
+    }
+
+    /// Display name of the connected client ("Claude Code", "Cursor", ...).
+    pub(crate) fn client_name(&self) -> String {
+        self.session
+            .lock()
+            .ok()
+            .and_then(|s| s.as_ref().map(|s| s.client.clone()))
+            .unwrap_or_else(|| "An agent".into())
+    }
+
+    /// Refresh the session file so the app shows this client as connected.
+    pub fn touch_session(&self) {
+        let session = match self.session.lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(s) => {
+                    s.last_seen = chrono::Utc::now();
+                    s.clone()
+                }
+                None => return,
+            },
+            Err(_) => return,
+        };
+        let dir = self.registry_dir();
+        if trax_core::registry::ensure_dir(&dir).is_ok() {
+            if let Err(e) = agents::write_session(&dir, &session) {
+                tracing::debug!("could not write session file: {e}");
+            }
+        }
+    }
+
+    /// Remove the session file (on shutdown).
+    pub fn end_session(&self) {
+        let pid = self
+            .session
+            .lock()
+            .ok()
+            .and_then(|s| s.as_ref().map(|s| s.pid));
+        if let Some(pid) = pid {
+            agents::remove_session(&self.registry_dir(), pid);
+        }
+    }
+
+    /// Note something the agent changed or ran, for the app's activity list.
+    pub(crate) fn record(&self, ws: &trax_core::Workspace, kind: ActivityKind, what: String) {
+        let activity = AgentActivity {
+            kind,
+            what,
+            client: self.client_name(),
+            at: chrono::Utc::now(),
+        };
+        if let Err(e) = ws.record_agent_activity(activity) {
+            tracing::debug!("could not record agent activity: {e}");
+        }
     }
 
     /// Handle one JSON-RPC message (or batch). Returns the response to send,
@@ -112,6 +181,32 @@ impl Server {
     }
 
     fn initialize(&self, params: &Value) -> Value {
+        let info = params.get("clientInfo");
+        let client_id = info
+            .and_then(|i| i.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let now = chrono::Utc::now();
+        if let Ok(mut session) = self.session.lock() {
+            *session = Some(AgentSession {
+                pid: std::process::id(),
+                client: agents::client_display_name(
+                    info.and_then(|i| i.get("title"))
+                        .and_then(Value::as_str)
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or(&client_id),
+                ),
+                client_id,
+                version: info
+                    .and_then(|i| i.get("version"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                started_at: now,
+                last_seen: now,
+            });
+        }
+        self.touch_session();
         let requested = params
             .get("protocolVersion")
             .and_then(Value::as_str)
@@ -178,6 +273,18 @@ pub async fn serve_stdio(server: Arc<Server>) -> std::io::Result<()> {
         }
     });
 
+    // Keep the session fresh so the app knows the client is still connected.
+    let heartbeat = {
+        let server = server.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tick.tick().await;
+                server.touch_session();
+            }
+        })
+    };
+
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
@@ -201,6 +308,8 @@ pub async fn serve_stdio(server: Arc<Server>) -> std::io::Result<()> {
     }
     drop(tx);
     let _ = writer.await;
+    heartbeat.abort();
+    server.end_session();
     Ok(())
 }
 

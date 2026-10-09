@@ -20,10 +20,16 @@ use crate::sync::ChangedEvent;
 const DEBOUNCE: Duration = Duration::from_millis(350);
 const REGISTRY_KEY: &str = "__registry__";
 
-/// Ignore git internals, local state and our own temp files.
+/// Ignore git internals, local state (except environments kept off git) and
+/// our own temp files.
 fn relevant(path: &Path) -> bool {
-    let ignored_dir = path.components().any(|c| {
-        matches!(c, Component::Normal(n) if n == ".git" || n == ".trax" || n == "node_modules" || n == "target")
+    let parts: Vec<_> = path.components().collect();
+    let ignored_dir = parts.iter().enumerate().any(|(i, c)| match c {
+        Component::Normal(n) if *n == ".trax" => {
+            !matches!(parts.get(i + 1), Some(Component::Normal(next)) if *next == "environments")
+        }
+        Component::Normal(n) => *n == ".git" || *n == "node_modules" || *n == "target",
+        _ => false,
     });
     let tmp = path
         .file_name()
@@ -121,5 +127,21 @@ pub fn refresh(app: &AppHandle) {
             }
             Err(e) => tracing::warn!("cannot watch {}: {e}", entry.path),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relevant;
+    use std::path::Path;
+
+    #[test]
+    fn local_environments_are_watched_but_other_local_state_is_not() {
+        assert!(relevant(Path::new("/w/collections/a/b.req.yaml")));
+        assert!(relevant(Path::new("/w/.trax/environments/local.env.yaml")));
+        assert!(!relevant(Path::new("/w/.trax/state.json")));
+        assert!(!relevant(Path::new("/w/.trax/history.json")));
+        assert!(!relevant(Path::new("/w/.git/index")));
+        assert!(!relevant(Path::new("/w/collections/a/b.req.yaml.tmp")));
     }
 }

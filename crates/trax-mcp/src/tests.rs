@@ -29,6 +29,14 @@ impl Harness {
         }
     }
 
+    /// Change what agents may do, as the app does.
+    fn permissions(&self, f: impl FnOnce(&mut trax_core::AgentPermissions)) {
+        let mut reg = trax_core::Registry::load(self._home.path()).unwrap();
+        f(&mut reg.data.agent_permissions);
+        trax_core::registry::ensure_dir(reg.dir()).unwrap();
+        reg.save().unwrap();
+    }
+
     async fn rpc(&self, method: &str, params: Value) -> Value {
         let id = self
             .next_id
@@ -142,12 +150,13 @@ async fn agent_builds_and_runs_a_suite() {
     assert!(!err, "{text}");
     assert!(text.contains("Created workspace"));
 
-    let (text, _, err) = h
-        .tool(
-            "upsert_environment",
-            json!({ "name": "local", "variables": { "baseUrl": api.uri(), "apiKey": "k" } }),
-        )
-        .await;
+    // Editing environments is off until the user allows it.
+    let env_args = json!({ "name": "local", "variables": { "baseUrl": api.uri(), "apiKey": "k" } });
+    let (text, _, err) = h.tool("upsert_environment", env_args.clone()).await;
+    assert!(err, "{text}");
+    assert!(text.contains("Edit environments"), "{text}");
+    h.permissions(|p| p.edit_environments = true);
+    let (text, _, err) = h.tool("upsert_environment", env_args).await;
     assert!(!err, "{text}");
     assert!(text.contains("active environment"));
 
@@ -253,4 +262,141 @@ async fn agent_builds_and_runs_a_suite() {
         yaml.contains("url: '{{baseUrl}}/users/{{userId}}'"),
         "{yaml}"
     );
+}
+
+#[tokio::test]
+async fn permissions_protected_environments_and_activity() {
+    let api = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/me"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-token-echo", "tok_live_123456")
+                .set_body_json(json!({ "name": "Ada" })),
+        )
+        .mount(&api)
+        .await;
+
+    let h = Harness::new();
+    let init = h
+        .rpc(
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "claude-code", "version": "2.1.0" } }),
+        )
+        .await;
+    assert!(init.get("result").is_some());
+    let session_file = h
+        ._home
+        .path()
+        .join("agents")
+        .join(format!("{}.json", std::process::id()));
+    assert!(session_file.exists());
+    let live = trax_core::agents::live_sessions(h._home.path(), chrono::Utc::now());
+    assert_eq!(live[0].client, "Claude Code");
+
+    let ws_dir = h.repo.path().join("api-tests");
+    h.tool(
+        "init_workspace",
+        json!({ "path": ws_dir.to_string_lossy() }),
+    )
+    .await;
+    // Base URL as a collection variable: no environment permission needed.
+    let (text, _, err) = h
+        .tool(
+            "upsert_collection",
+            json!({ "name": "Account", "variables": { "baseUrl": api.uri() } }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    h.tool(
+        "upsert_request",
+        json!({
+            "collection": "Account",
+            "name": "Me",
+            "url": "{{baseUrl}}/me",
+            "headers": { "Authorization": "Bearer {{token}}" },
+            "scripts": { "postResponse": "trax.test('ok', () => trax.expect(trax.response.status).toBe(200));" }
+        }),
+    )
+    .await;
+
+    // The user sets up environments in the app: a protected one with a secret.
+    let ws = trax_core::Workspace::open(&ws_dir).unwrap();
+    let mut prod = trax_core::Environment::new("Production");
+    prod.protected = true;
+    let mut token = trax_core::Variable::new("token", "tok_live_123456");
+    token.secret = true;
+    prod.variables.push(token.clone());
+    let prod = ws.save_environment(&prod).unwrap();
+    let mut local = trax_core::Environment::new("Local");
+    local.variables.push(token);
+    ws.save_environment(&local).unwrap();
+    let mut reg = trax_core::Registry::load(h._home.path()).unwrap();
+    let entry_id = reg.workspaces()[0].id.clone();
+    reg.get_mut(&entry_id).unwrap().prefs.active_environment = Some(prod.id.clone());
+    reg.save().unwrap();
+
+    let (text, _, err) = h.tool("run_request", json!({ "request": "Me" })).await;
+    assert!(err && text.contains("protected"), "{text}");
+
+    let (text, result, err) = h
+        .tool(
+            "run_request",
+            json!({ "request": "Me", "environment": "Local" }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert!(!text.contains("tok_live_123456"), "{text}");
+    assert!(text.contains("••••••"), "{text}");
+    assert!(!result.to_string().contains("tok_live_123456"));
+    assert!(text.contains("\"name\": \"Ada\""), "{text}");
+
+    let (text, _, _) = h.tool("list_environments", json!({})).await;
+    assert!(text.contains("token = ••••••"), "{text}");
+    assert!(text.contains("protected"), "{text}");
+
+    h.permissions(|p| {
+        p.read_responses = false;
+        p.read_secrets = true;
+    });
+    let (text, result, err) = h
+        .tool(
+            "run_request",
+            json!({ "request": "Me", "environment": "Local" }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert!(!text.contains("Ada"), "{text}");
+    assert!(text.contains("Read responses"), "{text}");
+    assert_eq!(result["response"]["status"], 200);
+    assert_eq!(result["response"]["body"], "");
+
+    h.permissions(|p| p.run_requests = false);
+    let (text, _, err) = h
+        .tool(
+            "run_request",
+            json!({ "request": "Me", "environment": "Local" }),
+        )
+        .await;
+    assert!(err && text.contains("Run requests"), "{text}");
+    h.permissions(|p| p.edit_requests = false);
+    let (text, _, err) = h.tool("delete_request", json!({ "request": "Me" })).await;
+    assert!(err && text.contains("Create and edit requests"), "{text}");
+
+    let activity = ws.agent_activity().unwrap();
+    let kinds: Vec<_> = activity.iter().map(|a| (a.kind, a.what.as_str())).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (trax_core::ActivityKind::Ran, "Me: 200, 1 of 1 tests passed"),
+            (trax_core::ActivityKind::Ran, "Me: 200, 1 of 1 tests passed"),
+            (trax_core::ActivityKind::Created, "Request Me in Account"),
+            (trax_core::ActivityKind::Created, "Collection Account"),
+            (trax_core::ActivityKind::Created, "Workspace api-tests"),
+        ]
+    );
+    assert!(activity.iter().all(|a| a.client == "Claude Code"));
+
+    h.server.end_session();
+    assert!(!session_file.exists());
 }

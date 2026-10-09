@@ -274,3 +274,19 @@ fn file_versions_for_staged_and_unstaged() {
     assert!(before.is_none());
     assert_eq!(after.as_deref(), Some("name: new\n"));
 }
+
+#[test]
+fn contributors_are_counted_by_email() {
+    let (_root, alice, bob) = team();
+    assert_eq!(bob.contributors(100).unwrap(), 1);
+    write(&bob, "b.req.yaml", "name: b\n");
+    bob.stage(&[]).unwrap();
+    bob.commit("bob's request", false).unwrap();
+    bob.push(None, false).unwrap();
+    alice.pull(PullMode::Merge).unwrap();
+    assert_eq!(alice.contributors(100).unwrap(), 2);
+    let empty = tempfile::tempdir().unwrap();
+    let git = Git::new(empty.path());
+    git.init("main").unwrap();
+    assert_eq!(git.contributors(100).unwrap(), 0);
+}

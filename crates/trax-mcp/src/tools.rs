@@ -5,8 +5,9 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 use trax_core::{
-    run_draft, run_group, run_saved, save_run_response, Environment, GroupMeta, GroupNode,
-    Registry, Request, RunOptions, TreeItem, Workspace,
+    run_draft, run_group, run_saved, save_run_response, ActivityKind, AgentPermissions,
+    Environment, GroupMeta, GroupNode, Registry, Request, RunOptions, RunResult, TreeItem,
+    Workspace,
 };
 
 use crate::args::{self, opt_bool, opt_str, opt_u64, req_str};
@@ -274,7 +275,14 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 pub async fn call(server: &Server, name: &str, args: &Value) -> Result<ToolOutput, String> {
-    match name {
+    let perms = registry(server)
+        .map(|r| r.data.agent_permissions)
+        .unwrap_or_default();
+    check_allowed(name, &perms)?;
+    if matches!(name, "run_request" | "run_collection" | "send_http_request") {
+        check_not_protected(server, args)?;
+    }
+    let mut out = match name {
         "list_workspaces" => list_workspaces(server),
         "init_workspace" => init_workspace(server, args),
         "get_workspace" => get_workspace(server, args),
@@ -282,13 +290,145 @@ pub async fn call(server: &Server, name: &str, args: &Value) -> Result<ToolOutpu
         "upsert_collection" => upsert_collection(server, args),
         "upsert_request" => upsert_request(server, args),
         "delete_request" => delete_request(server, args),
-        "run_request" => run_request(server, args).await,
-        "run_collection" => run_collection(server, args).await,
-        "send_http_request" => send_http_request(server, args).await,
-        "list_environments" => list_environments(server, args),
+        "run_request" => run_request(server, args, &perms).await,
+        "run_collection" => run_collection(server, args, &perms).await,
+        "send_http_request" => send_http_request(server, args, &perms).await,
+        "list_environments" => list_environments(server, args, &perms),
         "upsert_environment" => upsert_environment(server, args),
-        "list_saved_responses" => list_saved_responses(server, args),
+        "list_saved_responses" => list_saved_responses(server, args, &perms),
         other => Err(format!("unknown tool `{other}`")),
+    }?;
+    if !perms.read_secrets {
+        if let Ok((ws, _)) = workspace(server, args) {
+            redact_secrets(&mut out, &secret_values(&ws));
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ permissions
+
+const SETTINGS_HINT: &str =
+    "Ask the user to allow it in the http-trax app (AI agents, What agents can do).";
+
+fn check_allowed(tool: &str, perms: &AgentPermissions) -> Result<(), String> {
+    let (allowed, what) = match tool {
+        "init_workspace" | "upsert_collection" | "upsert_request" | "delete_request" => {
+            (perms.edit_requests, "Create and edit requests")
+        }
+        "run_request" | "run_collection" | "send_http_request" => {
+            (perms.run_requests, "Run requests and tests")
+        }
+        "upsert_environment" => (perms.edit_environments, "Edit environments"),
+        _ => (true, ""),
+    };
+    if allowed {
+        Ok(())
+    } else {
+        let extra = if tool == "upsert_environment" {
+            " To set a base URL, put it in collection variables with upsert_collection instead."
+        } else {
+            ""
+        };
+        Err(format!(
+            "Not allowed: \"{what}\" is turned off for agents. {SETTINGS_HINT}{extra}"
+        ))
+    }
+}
+
+/// Agents never send requests with an environment the user marked protected.
+fn check_not_protected(server: &Server, args: &Value) -> Result<(), String> {
+    let Ok((ws, entry)) = workspace(server, args) else {
+        return Ok(());
+    };
+    let Some(needle) = default_environment(server, args, entry.as_deref()) else {
+        return Ok(());
+    };
+    match ws.find_environment(&needle) {
+        Ok(view) if view.environment.protected => Err(format!(
+            "The environment \"{}\" is protected, so agents can't send requests with it. \
+             Pass `environment` with another one (see list_environments), or ask the user to \
+             switch environments in the app.",
+            view.environment.name
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Values of secret variables in any environment, longest first.
+fn secret_values(ws: &Workspace) -> Vec<String> {
+    let mut out: Vec<String> = ws
+        .environments()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|v| v.environment.variables)
+        .filter(|v| v.secret && v.value.chars().count() >= 4)
+        .map(|v| v.value)
+        .collect();
+    out.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    out.dedup();
+    out
+}
+
+const MASK: &str = "••••••";
+
+fn redact_secrets(out: &mut ToolOutput, secrets: &[String]) {
+    if secrets.is_empty() {
+        return;
+    }
+    fn redact_str(s: &mut String, secrets: &[String]) {
+        for secret in secrets {
+            if s.contains(secret.as_str()) {
+                *s = s.replace(secret.as_str(), MASK);
+            }
+        }
+    }
+    fn redact_value(v: &mut Value, secrets: &[String]) {
+        match v {
+            Value::String(s) => redact_str(s, secrets),
+            Value::Array(items) => items.iter_mut().for_each(|i| redact_value(i, secrets)),
+            Value::Object(map) => map.values_mut().for_each(|i| redact_value(i, secrets)),
+            _ => {}
+        }
+    }
+    redact_str(&mut out.text, secrets);
+    if let Some(v) = &mut out.structured {
+        redact_value(v, secrets);
+    }
+}
+
+const RESPONSES_HIDDEN: &str =
+    "Response headers and body are hidden: \"Read responses\" is turned off for agents.";
+
+/// Drop response headers and body when agents may not read responses.
+fn visible_result(result: &RunResult, perms: &AgentPermissions) -> RunResult {
+    let mut r = result.clone();
+    if !perms.read_responses {
+        if let Some(resp) = &mut r.response {
+            resp.headers.clear();
+            resp.body.clear();
+            resp.body_base64 = None;
+        }
+    }
+    r
+}
+
+fn run_summary(r: &RunResult) -> String {
+    let outcome = match (&r.response, &r.error) {
+        (Some(resp), _) => resp.status.to_string(),
+        (None, Some(_)) => "failed".into(),
+        (None, None) if r.skipped => "skipped".into(),
+        (None, None) => "no response".into(),
+    };
+    let total = r.tests_passed() + r.tests_failed();
+    if total > 0 {
+        format!(
+            "{}: {outcome}, {} of {total} tests passed",
+            r.request_name,
+            r.tests_passed()
+        )
+    } else {
+        format!("{}: {outcome}", r.request_name)
     }
 }
 
@@ -528,6 +668,13 @@ fn init_workspace(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let entry = reg.register(&ws).map_err(err)?;
     trax_core::registry::ensure_dir(reg.dir()).map_err(err)?;
     reg.save().map_err(err)?;
+    if created {
+        server.record(
+            &ws,
+            ActivityKind::Created,
+            format!("Workspace {}", entry.name),
+        );
+    }
     let verb = if created {
         "Created"
     } else {
@@ -608,6 +755,15 @@ fn upsert_collection(server: &Server, args: &Value) -> Result<ToolOutput, String
             serde_json::from_value(current).map_err(|e| format!("invalid scripts: {e}"))?;
     }
     ws.update_group(&meta).map_err(err)?;
+    server.record(
+        &ws,
+        if created {
+            ActivityKind::Created
+        } else {
+            ActivityKind::Edited
+        },
+        format!("Collection {}", meta.name),
+    );
     Ok(ToolOutput::with(
         format!(
             "{} collection \"{}\" [{}]",
@@ -719,6 +875,25 @@ fn upsert_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
         }
         None => (ws.create_request(&parent_id, request).map_err(err)?, true),
     };
+    let place = ws
+        .request_context(&request.id)
+        .map(|c| {
+            c.ancestors
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        })
+        .unwrap_or_default();
+    server.record(
+        &ws,
+        if created {
+            ActivityKind::Created
+        } else {
+            ActivityKind::Edited
+        },
+        format!("Request {} in {place}", request.name),
+    );
     Ok(ToolOutput::with(
         format!(
             "{} request \"{}\" [{}]: {} {}",
@@ -737,6 +912,7 @@ fn delete_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let id = resolve_request(&ws, req_str(args, "request")?)?;
     let name = ws.request(&id).map_err(err)?.name;
     ws.delete_request(&id).map_err(err)?;
+    server.record(&ws, ActivityKind::Deleted, format!("Request {name}"));
     Ok(ToolOutput::text(format!(
         "Deleted request \"{name}\" [{id}]"
     )))
@@ -751,15 +927,25 @@ fn output_opts(args: &Value) -> (usize, bool) {
     )
 }
 
-async fn run_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+async fn run_request(
+    server: &Server,
+    args: &Value,
+    perms: &AgentPermissions,
+) -> Result<ToolOutput, String> {
     let (ws, entry) = workspace(server, args)?;
     let id = resolve_request(&ws, req_str(args, "request")?)?;
     let opts = run_options(server, args, entry.as_deref());
-    let result = run_saved(&ws, &id, &opts).await.map_err(err)?;
+    let full = run_saved(&ws, &id, &opts).await.map_err(err)?;
+    server.record(&ws, ActivityKind::Ran, run_summary(&full));
+    let result = visible_result(&full, perms);
     let (max_body, headers) = output_opts(args);
     let mut text = format::run_result(&result, max_body, headers);
+    if !perms.read_responses {
+        text.push_str(RESPONSES_HIDDEN);
+        text.push('\n');
+    }
     if let Some(name) = args.get("save_response_as").and_then(Value::as_str) {
-        match save_run_response(&ws, &id, name, &result) {
+        match save_run_response(&ws, &id, name, &full) {
             Ok(saved) => text.push_str(&format!(
                 "Saved response as \"{}\" [{}]\n",
                 saved.name, saved.id
@@ -793,19 +979,42 @@ fn truncate_structured_body(v: &mut Value, max: usize) {
     }
 }
 
-async fn run_collection(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+async fn run_collection(
+    server: &Server,
+    args: &Value,
+    perms: &AgentPermissions,
+) -> Result<ToolOutput, String> {
     let (ws, entry) = workspace(server, args)?;
     let group = group_by_path(&ws, req_str(args, "collection")?, opt_str(args, "folder"))?;
     let opts = run_options(server, args, entry.as_deref());
     let stop = opt_bool(args, "stop_on_failure").unwrap_or(false);
     let (report, results) = run_group(&ws, &group, &opts, stop).await.map_err(err)?;
+    server.record(
+        &ws,
+        ActivityKind::Ran,
+        format!(
+            "{} {} in {}, {} passed",
+            report.total,
+            if report.total == 1 {
+                "request"
+            } else {
+                "requests"
+            },
+            report.group_name,
+            report.succeeded
+        ),
+    );
     let mut text = format::report(&report);
     // Detail for failures so the agent can act without another round-trip.
     for r in results.iter().filter(|r| !r.ok()) {
         text.push_str("\n--- ");
         text.push_str(&r.request_name);
         text.push_str(" ---\n");
-        text.push_str(&format::run_result(r, 2_000, false));
+        text.push_str(&format::run_result(&visible_result(r, perms), 2_000, false));
+    }
+    if !perms.read_responses && results.iter().any(|r| !r.ok()) {
+        text.push_str(RESPONSES_HIDDEN);
+        text.push('\n');
     }
     let is_error = report.failed > 0;
     Ok(ToolOutput {
@@ -815,7 +1024,11 @@ async fn run_collection(server: &Server, args: &Value) -> Result<ToolOutput, Str
     })
 }
 
-async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+async fn send_http_request(
+    server: &Server,
+    args: &Value,
+    perms: &AgentPermissions,
+) -> Result<ToolOutput, String> {
     // Ad-hoc requests work even without a workspace (no variables then).
     let ws_result = workspace(server, args);
     let mut request = Request::new(
@@ -847,7 +1060,22 @@ async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, 
     let result = match ws_result {
         Ok((ws, entry)) => {
             let opts = run_options(server, args, entry.as_deref());
-            run_draft(&ws, &request, None, &opts).await.map_err(err)?
+            let result = run_draft(&ws, &request, None, &opts).await.map_err(err)?;
+            server.record(
+                &ws,
+                ActivityKind::Ran,
+                format!(
+                    "{} {}: {}",
+                    result.request.method,
+                    result.request.url,
+                    result
+                        .response
+                        .as_ref()
+                        .map(|r| r.status.to_string())
+                        .unwrap_or_else(|| "failed".into())
+                ),
+            );
+            result
         }
         Err(_) => {
             // Scratch workspace so scripts and variables still work.
@@ -866,7 +1094,12 @@ async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, 
             run_draft(&ws, &request, None, &opts).await.map_err(err)?
         }
     };
-    let text = format::run_result(&result, max_body, headers);
+    let result = visible_result(&result, perms);
+    let mut text = format::run_result(&result, max_body, headers);
+    if !perms.read_responses {
+        text.push_str(RESPONSES_HIDDEN);
+        text.push('\n');
+    }
     let mut structured = serde_json::to_value(&result).map_err(err)?;
     truncate_structured_body(&mut structured, max_body);
     Ok(ToolOutput {
@@ -878,7 +1111,11 @@ async fn send_http_request(server: &Server, args: &Value) -> Result<ToolOutput, 
     })
 }
 
-fn list_environments(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+fn list_environments(
+    server: &Server,
+    args: &Value,
+    perms: &AgentPermissions,
+) -> Result<ToolOutput, String> {
     let (ws, entry) = workspace(server, args)?;
     let active = default_environment(server, &json!({}), entry.as_deref());
     let envs = ws.environments().map_err(err)?;
@@ -896,15 +1133,20 @@ fn list_environments(server: &Server, args: &Value) -> Result<ToolOutput, String
             .as_deref()
             .is_some_and(|a| a == env.id || a.eq_ignore_ascii_case(&env.name));
         text.push_str(&format!(
-            "{} {} [{}]\n",
+            "{} {} [{}]{}\n",
             if is_active { "*" } else { "-" },
             env.name,
-            env.id
+            env.id,
+            if env.protected {
+                " (protected: agents can't run requests with it)"
+            } else {
+                ""
+            }
         ));
         let mut vars = BTreeMap::new();
         for v in &env.variables {
-            let value = if v.secret {
-                "••••••".to_string()
+            let value = if v.secret && !perms.read_secrets {
+                MASK.to_string()
             } else {
                 view.overrides
                     .get(&v.key)
@@ -925,9 +1167,13 @@ fn list_environments(server: &Server, args: &Value) -> Result<ToolOutput, String
                 vars.insert(k.clone(), v.clone());
             }
         }
-        list.push(
-            json!({ "id": env.id, "name": env.name, "active": is_active, "variables": vars }),
-        );
+        list.push(json!({
+            "id": env.id,
+            "name": env.name,
+            "active": is_active,
+            "protected": env.protected,
+            "variables": vars,
+        }));
     }
     Ok(ToolOutput::with(text, json!({ "environments": list })))
 }
@@ -959,6 +1205,15 @@ fn upsert_environment(server: &Server, args: &Value) -> Result<ToolOutput, Strin
         }
     }
     let env = ws.save_environment(&env).map_err(err)?;
+    server.record(
+        &ws,
+        if created {
+            ActivityKind::Created
+        } else {
+            ActivityKind::Edited
+        },
+        format!("Environment {}", env.name),
+    );
 
     let only_one = ws.environments().map(|e| e.len() == 1).unwrap_or(false);
     let activate = opt_bool(args, "activate").unwrap_or(only_one);
@@ -988,10 +1243,21 @@ fn upsert_environment(server: &Server, args: &Value) -> Result<ToolOutput, Strin
     ))
 }
 
-fn list_saved_responses(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+fn list_saved_responses(
+    server: &Server,
+    args: &Value,
+    perms: &AgentPermissions,
+) -> Result<ToolOutput, String> {
     let (ws, _) = workspace(server, args)?;
     let id = resolve_request(&ws, req_str(args, "request")?)?;
-    let saved = ws.saved_responses(&id).map_err(err)?;
+    let mut saved = ws.saved_responses(&id).map_err(err)?;
+    if !perms.read_responses {
+        for s in &mut saved {
+            s.response.headers.clear();
+            s.response.body.clear();
+            s.response.body_base64 = None;
+        }
+    }
     if saved.is_empty() {
         return Ok(ToolOutput::with(
             "No saved responses.",

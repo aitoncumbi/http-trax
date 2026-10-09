@@ -396,6 +396,34 @@ pub async fn delete_environment(
         .str_err()
 }
 
+/// Keep an environment in git (shared with the team) or on this machine only.
+#[tauri::command]
+pub async fn set_environment_shared(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    id: String,
+    shared: bool,
+) -> CmdResult<EnvironmentView> {
+    state
+        .workspace(&workspace_id)?
+        .set_environment_shared(&id, shared)
+        .str_err()
+}
+
+/// Import a Postman collection or environment export.
+#[tauri::command]
+pub async fn import_json(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    json: String,
+) -> CmdResult<ImportSummary> {
+    let ws = state.workspace(&workspace_id)?;
+    tauri::async_runtime::spawn_blocking(move || ws.import_json(&json))
+        .await
+        .str_err()?
+        .str_err()
+}
+
 /// Set (Some) or clear (None) a local override ("current value").
 #[tauri::command]
 pub async fn set_environment_override(
