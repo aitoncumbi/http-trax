@@ -5,7 +5,7 @@ const config = [
   ...nextVitals,
   ...nextTs,
   {
-    ignores: [".next/**", "out/**", "target/**", "src-tauri/**", "next-env.d.ts"],
+    ignores: [".next/**", "out/**", "target/**", "src-tauri/**", "crates/**", "scripts/**", "next-env.d.ts"],
   },
 ];
 
