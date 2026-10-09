@@ -658,6 +658,18 @@ fn collect(result: &mut RunResult, out: &trax_script::ScriptOutput, phase: &str,
     }
 }
 
+/// History is a convenience: failing to write it never fails a run.
+fn record_history(ws: &Workspace, session: &Session, runs: &[&RunResult]) {
+    let env = session.env_id.as_ref().map(|_| session.env_name.as_str());
+    let entries = runs
+        .iter()
+        .map(|r| crate::history::HistoryEntry::from_run(r, env))
+        .collect();
+    if let Err(e) = ws.record_history(entries) {
+        tracing::warn!("could not record history: {e}");
+    }
+}
+
 /// Run a request that may have unsaved edits. Inheritance comes from the
 /// saved request's location, or from `parent_id` for a new request, or
 /// nothing for an ad-hoc request.
@@ -679,6 +691,7 @@ pub async fn run_draft(
     let result = execute(ws, &mut session, request, &ancestors).await;
     if opts.persist {
         session.persist(ws)?;
+        record_history(ws, &session, &[&result]);
     }
     Ok(result)
 }
@@ -690,6 +703,7 @@ pub async fn run_saved(ws: &Workspace, request_id: &str, opts: &RunOptions) -> R
     let result = execute(ws, &mut session, &ctx.request, &ctx.ancestors).await;
     if opts.persist {
         session.persist(ws)?;
+        record_history(ws, &session, &[&result]);
     }
     Ok(result)
 }
@@ -739,6 +753,7 @@ pub async fn run_group(
     }
     if opts.persist {
         session.persist(ws)?;
+        record_history(ws, &session, &results.iter().collect::<Vec<_>>());
     }
     let report = CollectionRunReport {
         group_id: group.meta.id.clone(),
@@ -886,6 +901,12 @@ mod tests {
             Some("fresh")
         );
         assert_eq!(ws.local_state().unwrap().runtime_variables["user"], "ada");
+
+        // Runs land in the local history, newest first.
+        let history = ws.history().unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].name, "Me");
+        assert_eq!(history[0].environment.as_deref(), Some("Local"));
 
         // Saving a response.
         let saved = save_run_response(&ws, &login.id, "", &results[0]).unwrap();

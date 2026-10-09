@@ -12,12 +12,13 @@
     "windows": [
       {
         "label": "main",
-        "title": "http-trax",
+        "title": "Courion",
         "width": 1400,
         "height": 900,
-        "minWidth": 960,
+        "minWidth": 1024,
         "minHeight": 600,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "decorations": false
       }
     ],
     "security": {
