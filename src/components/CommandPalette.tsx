@@ -3,6 +3,7 @@
 import {
   Bot,
   Code2,
+  Download,
   FolderTree,
   GitBranch,
   LayoutGrid,
@@ -32,6 +33,8 @@ interface Item {
   shortcut?: string;
   section: string;
   run: () => void;
+  /** Secondary actions, shown with Ctrl+. */
+  actions?: { label: string; run: () => void }[];
 }
 
 interface FlatRequest {
@@ -80,6 +83,8 @@ export function CommandPalette() {
   const s = useStore.getState();
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
+  /** Index of the item whose actions are open (Ctrl+.), and the selected action. */
+  const [actionsOf, setActionsOf] = useState<{ item: Item; index: number } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -94,6 +99,7 @@ export function CommandPalette() {
     s.closePalette();
     setQuery("");
     setIndex(0);
+    setActionsOf(null);
   };
 
   const requests = useMemo(() => flatten(tree?.collections ?? []), [tree]);
@@ -132,14 +138,29 @@ export function CommandPalette() {
     }
 
     const open = (id: string) => () => {
-      s.setView("collections");
+      if (s.view !== "history") s.setView("collections");
       void s.openRequest(id);
     };
+    const requestActions = (r: FlatRequest): Item["actions"] => [
+      { label: "Open", run: open(r.id) },
+      {
+        label: "Open and send",
+        run: async () => {
+          if (s.view !== "history") s.setView("collections");
+          await s.openRequest(r.id);
+          const tab = useStore.getState().tabs.find((t) => t.kind === "request" && t.requestId === r.id);
+          if (tab) void s.sendTab(tab.id);
+        },
+      },
+      { label: "Copy URL", run: () => void navigator.clipboard?.writeText(r.url) },
+      { label: "Copy name", run: () => void navigator.clipboard?.writeText(r.name) },
+    ];
     const commands: Item[] = [
       { id: "new", label: "New request", icon: <Plus size={17} strokeWidth={1.5} />, shortcut: "Ctrl N", section: "Commands", run: () => void s.newRequestHere() },
       { id: "ws", label: "Switch workspace", icon: <LayoutGrid size={16} strokeWidth={1.4} />, shortcut: "Ctrl 1–9", section: "Commands", run: () => s.openPalette("workspaces") },
       { id: "env", label: "Switch environment", icon: <SlidersHorizontal size={16} strokeWidth={1.4} />, shortcut: "Ctrl E", section: "Commands", run: () => s.openPalette("environments") },
-      { id: "curl", label: "Import from cURL", icon: <Code2 size={16} strokeWidth={1.4} />, shortcut: "Ctrl Shift I", section: "Commands", run: () => s.showImportDialog() },
+      { id: "curl", label: "Import from cURL", icon: <Code2 size={16} strokeWidth={1.4} />, shortcut: "Ctrl Shift I", section: "Commands", run: () => s.showImportDialog("curl") },
+      { id: "postman", label: "Import from Postman", icon: <Download size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.showImportDialog("postman") },
       { id: "collection", label: "New collection", icon: <FolderTree size={16} strokeWidth={1.4} />, section: "Commands", run: () => void s.createCollection() },
       { id: "git", label: "Open source control", icon: <GitBranch size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("git") },
       { id: "sync", label: "Sync with remote now", icon: <RefreshCw size={16} strokeWidth={1.4} />, section: "Commands", run: () => void s.syncNow() },
@@ -152,6 +173,7 @@ export function CommandPalette() {
       },
       { id: "theme", label: s.theme === "dark" ? "Use light theme" : "Use dark theme", icon: <Moon size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.toggleTheme() },
       { id: "mcp", label: "Connect an AI agent (MCP)", icon: <Bot size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("mcp") },
+      { id: "envs", label: "Edit environments", icon: <SlidersHorizontal size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("environments") },
       ...(tree?.collections ?? []).map((c) => ({
         id: `run:${c.meta.id}`,
         label: `Run ${c.meta.name}`,
@@ -169,12 +191,12 @@ export function CommandPalette() {
         const req = requests.find((r) => r.id === h.requestId);
         if (!req) continue;
         seen.add(h.requestId);
-        recent.push({ id: `r:${req.id}`, label: req.name, detail: req.path, method: req.method, section: "Recent", run: open(req.id) });
+        recent.push({ id: `r:${req.id}`, label: req.name, detail: req.path, method: req.method, section: "Recent", run: open(req.id), actions: requestActions(req) });
         if (recent.length >= 4) break;
       }
       if (recent.length === 0) {
         for (const req of requests.slice(0, 4)) {
-          recent.push({ id: `r:${req.id}`, label: req.name, detail: req.path, method: req.method, section: "Requests", run: open(req.id) });
+          recent.push({ id: `r:${req.id}`, label: req.name, detail: req.path, method: req.method, section: "Requests", run: open(req.id), actions: requestActions(req) });
         }
       }
       return [...recent, ...commands.filter((c) => !c.id.startsWith("run:"))];
@@ -185,7 +207,7 @@ export function CommandPalette() {
       .filter((x) => x.s >= 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, 8)
-      .map(({ r }) => ({ id: `r:${r.id}`, label: r.name, detail: r.path, method: r.method, section: "Requests", run: open(r.id) }));
+      .map(({ r }) => ({ id: `r:${r.id}`, label: r.name, detail: r.path, method: r.method, section: "Requests", run: open(r.id), actions: requestActions(r) }));
     const matchedCommands = commands
       .map((c) => ({ c, s: score(c.label, q) }))
       .filter((x) => x.s >= 0)
@@ -246,7 +268,23 @@ export function CommandPalette() {
               setIndex(0);
             }}
             onKeyDown={(e) => {
-              if (e.key === "ArrowDown") {
+              if (actionsOf) {
+                const actions = actionsOf.item.actions ?? [];
+                e.preventDefault();
+                if (e.key === "ArrowDown") setActionsOf({ ...actionsOf, index: Math.min(actions.length - 1, actionsOf.index + 1) });
+                else if (e.key === "ArrowUp") setActionsOf({ ...actionsOf, index: Math.max(0, actionsOf.index - 1) });
+                else if (e.key === "Enter") {
+                  const action = actions[actionsOf.index];
+                  close();
+                  action?.run();
+                } else if (e.key === "Escape" || (e.key === "." && (e.ctrlKey || e.metaKey))) setActionsOf(null);
+                return;
+              }
+              if (e.key === "." && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                const item = items[current];
+                if (item?.actions?.length) setActionsOf({ item, index: 0 });
+              } else if (e.key === "ArrowDown") {
                 e.preventDefault();
                 setIndex(Math.min(items.length - 1, current + 1));
               } else if (e.key === "ArrowUp") {
@@ -269,7 +307,27 @@ export function CommandPalette() {
           />
           <kbd className="kbd">Esc</kbd>
         </div>
-        <div ref={listRef} className="max-h-[440px] overflow-y-auto p-2">
+        {actionsOf && (
+          <div className="p-2">
+            <div className="px-3 pt-2 pb-1.5 text-[11.5px] font-semibold tracking-[0.04em] text-faint">Actions for {actionsOf.item.label}</div>
+            {(actionsOf.item.actions ?? []).map((a, i) => (
+              <button
+                key={a.label}
+                type="button"
+                onMouseMove={() => setActionsOf({ ...actionsOf, index: i })}
+                onClick={() => {
+                  close();
+                  a.run();
+                }}
+                className={cx("relative flex h-10 w-full items-center rounded-[9px] px-3 text-left text-[14px]", i === actionsOf.index ? "bg-selected text-text" : "text-text-2")}
+              >
+                {i === actionsOf.index && <span className="absolute top-0 bottom-0 left-0 w-[3px] rounded-sm bg-accent-line" />}
+                {a.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div ref={listRef} className={cx("max-h-[440px] overflow-y-auto p-2", actionsOf && "hidden")}>
           {items.length === 0 && <p className="px-3 py-6 text-center text-[13.5px] text-faint">Nothing matches “{query}”.</p>}
           {items.map((item, i) => {
             const header = i === 0 || item.section !== items[i - 1].section ? item.section : null;
@@ -302,12 +360,12 @@ export function CommandPalette() {
             );
           })}
         </div>
-        <div className="flex h-10 items-center justify-end gap-[18px] border-t border-border bg-bg px-[18px] text-[12px] text-muted">
+        <div className="flex h-10 items-center justify-end gap-[18px] border-t border-border bg-panel-2 px-[18px] text-[12px] text-muted">
           <span className="flex items-center gap-1.5">
             Navigate <kbd className="kbd">↑ ↓</kbd>
           </span>
-          <span className="flex items-center gap-1.5">
-            Open <kbd className="kbd">↵</kbd>
+          <span className={cx("flex items-center gap-1.5", !items[current]?.actions && !actionsOf && "opacity-50")}>
+            Actions <kbd className="kbd">Ctrl .</kbd>
           </span>
           {mode !== "search" && (
             <span className="flex items-center gap-1.5">

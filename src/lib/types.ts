@@ -82,12 +82,16 @@ export interface GroupMeta {
 export interface Environment {
   id: string;
   name: string;
+  /** Sending needs confirmation; agents can't run requests with it. */
+  protected?: boolean;
   variables: Variable[];
 }
 
 export interface EnvironmentView extends Environment {
   /** Local "current values" (set by scripts or edited locally). */
   overrides: Record<string, string>;
+  /** Committed to git (environments/) rather than kept on this machine. */
+  shared: boolean;
 }
 
 export interface RequestSummary {
@@ -420,4 +424,66 @@ export interface FileChanges {
   diff: string;
   additions: number;
   deletions: number;
+}
+
+// ------------------------------------------------------------- agents
+
+export interface AgentPermissions {
+  editRequests: boolean;
+  runRequests: boolean;
+  readResponses: boolean;
+  editEnvironments: boolean;
+  readSecrets: boolean;
+}
+
+export interface AgentSession {
+  pid: number;
+  client: string;
+  clientId: string;
+  version?: string | null;
+  startedAt: string;
+  lastSeen: string;
+}
+
+export type AgentClientStatus = "connected" | "configured" | "not-set-up";
+
+export interface AgentClient {
+  id: "code" | "desktop" | "vscode" | "other";
+  name: string;
+  status: AgentClientStatus;
+  configPath?: string | null;
+  session?: AgentSession | null;
+}
+
+export type ActivityKind = "created" | "edited" | "deleted" | "ran";
+
+export interface AgentActivity {
+  kind: ActivityKind;
+  what: string;
+  client: string;
+  at: string;
+}
+
+export interface AgentOverview {
+  permissions: AgentPermissions;
+  clients: AgentClient[];
+  sessions: AgentSession[];
+  activity: AgentActivity[];
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  exists: boolean;
+  requests: number;
+  collections: number;
+  isRepo: boolean;
+  remote?: string | null;
+  members?: number | null;
+}
+
+export interface ImportSummary {
+  collections: string[];
+  environments: string[];
+  requests: number;
+  warnings: string[];
 }

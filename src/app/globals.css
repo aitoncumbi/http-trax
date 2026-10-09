@@ -3,39 +3,42 @@
 /*
  * Courion design tokens (from the "Courion redesign" canvas).
  * Dark is the default; a light variant is opt-in via data-theme.
+ * --frame is the window chrome (title strip, rail, sidebar); --bg is the
+ * inset card that holds the main content.
  */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
   /* surfaces, back to front */
-  --rail: #19191a;
-  --bg: #1b1b1d;
-  --sunken: #181819;
-  --panel: #1f1f21;
-  --elev: #212123;
-  --panel-2: #262628;
-  --hover: #262628;
-  --selected: #2f2f32;
+  --frame: #08090a;
+  --rail: #08090a;
+  --bg: #0f1011;
+  --sunken: #0c0d0e;
+  --panel: #0c0c0d;
+  --elev: #151618;
+  --panel-2: #121315;
+  --hover: #16171a;
+  --selected: #1b1c1f;
   /* lines */
-  --border-soft: #2a2a2d;
-  --border: #2c2c2f;
-  --sep: #333336;
-  --border-mid: #343437;
-  --border-strong: #3a3a3e;
-  --checkbox-off: #4a4a50;
+  --border-soft: #1a1b1e;
+  --border: #1f2023;
+  --sep: #2c2e33;
+  --border-mid: #26282c;
+  --border-strong: #2c2e33;
+  --checkbox-off: #4a4d55;
   /* text */
-  --text: #f2f2f3;
-  --text-2: #d6d6da;
-  --muted: #a8a8ad;
-  --faint: #86868c;
-  --dim: #6f6f75;
+  --text: #f7f8f8;
+  --text-2: #d0d6e0;
+  --muted: #8a8f98;
+  --faint: #70757e;
+  --dim: #62666d;
   /* accent */
-  --accent: #2f6df6;
-  --accent-strong: #2a62de;
-  --accent-line: #3d7bff;
-  --accent-text: #7fa9ff;
-  --accent-text-2: #9cbcff;
-  --accent-soft: rgba(91, 147, 255, 0.14);
+  --accent: #5e6ad2;
+  --accent-strong: #6b76dc;
+  --accent-line: #5e6ad2;
+  --accent-text: #9aa2f0;
+  --accent-text-2: #a8b0f5;
+  --accent-soft: rgba(94, 106, 210, 0.14);
   --accent-fg: #ffffff;
   /* status */
   --ok: #5fd39a;
@@ -63,41 +66,42 @@
   --syn-str: #a6e3b8;
   --syn-num: #f0b45c;
   --syn-bool: #c39bff;
-  --syn-punct: #86868c;
-  --syn-comment: #6f6f75;
+  --syn-punct: #70757e;
+  --syn-comment: #62666d;
   --syn-kw: #c39bff;
-  --syn-fn: #f2f2f3;
+  --syn-fn: #f7f8f8;
   --shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
-  --scrim: rgba(10, 10, 11, 0.55);
+  --scrim: rgba(10, 10, 11, 0.6);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --rail: #efeff1;
-  --bg: #f8f8f9;
-  --sunken: #fbfbfc;
-  --panel: #f2f2f4;
+  --frame: #f2f3f5;
+  --rail: #f2f3f5;
+  --bg: #ffffff;
+  --sunken: #f9f9fb;
+  --panel: #f7f8fa;
   --elev: #ffffff;
-  --panel-2: #ebebee;
-  --hover: #e9e9ec;
-  --selected: #e1e1e6;
-  --border-soft: #e8e8eb;
-  --border: #e1e1e5;
-  --sep: #d4d4d9;
-  --border-mid: #d9d9de;
-  --border-strong: #cdcdd3;
-  --checkbox-off: #b9b9c0;
-  --text: #1b1b1d;
-  --text-2: #2f2f33;
-  --muted: #5c5c63;
-  --faint: #6f6f76;
-  --dim: #94949b;
-  --accent: #2f6df6;
-  --accent-strong: #2459d1;
-  --accent-line: #2f6df6;
-  --accent-text: #2459d1;
-  --accent-text-2: #2459d1;
-  --accent-soft: rgba(47, 109, 246, 0.1);
+  --panel-2: #f1f2f5;
+  --hover: #ebecf0;
+  --selected: #e5e6eb;
+  --border-soft: #ededf0;
+  --border: #e3e4e8;
+  --sep: #d3d5db;
+  --border-mid: #dcdde2;
+  --border-strong: #d0d2d8;
+  --checkbox-off: #b2b5bd;
+  --text: #16171a;
+  --text-2: #2b2d33;
+  --muted: #5b5f69;
+  --faint: #6c707a;
+  --dim: #979ba4;
+  --accent: #5e6ad2;
+  --accent-strong: #4e5ac4;
+  --accent-line: #5e6ad2;
+  --accent-text: #4b56c0;
+  --accent-text-2: #434eb5;
+  --accent-soft: rgba(94, 106, 210, 0.1);
   --accent-fg: #ffffff;
   --ok: #12804f;
   --warn: #a8650a;
@@ -121,15 +125,16 @@
   --syn-str: #12804f;
   --syn-num: #a8650a;
   --syn-bool: #7444d4;
-  --syn-punct: #6f6f76;
-  --syn-comment: #94949b;
+  --syn-punct: #6c707a;
+  --syn-comment: #979ba4;
   --syn-kw: #7444d4;
-  --syn-fn: #1b1b1d;
-  --shadow: 0 24px 60px rgba(20, 20, 30, 0.18);
+  --syn-fn: #16171a;
+  --shadow: 0 24px 60px rgba(20, 20, 30, 0.16);
   --scrim: rgba(30, 30, 35, 0.25);
 }
 
 @theme inline {
+  --color-frame: var(--frame);
   --color-rail: var(--rail);
   --color-bg: var(--bg);
   --color-sunken: var(--sunken);
@@ -174,7 +179,7 @@
   --color-diff-add-fg: var(--diff-add-fg);
   --color-diff-del: var(--diff-del);
   --color-diff-del-fg: var(--diff-del-fg);
-  --font-sans: "Schibsted Grotesk Variable", "Schibsted Grotesk", system-ui, "Segoe UI", sans-serif;
+  --font-sans: "Inter Variable", "Inter", system-ui, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
@@ -183,10 +188,11 @@
   html,
   body {
     height: 100%;
-    background: var(--bg);
+    background: var(--frame);
     color: var(--text);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: 13.5px;
+    letter-spacing: -0.005em;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
@@ -258,16 +264,16 @@
     @apply text-[11.5px] font-semibold tracking-[0.06em] text-faint uppercase;
   }
   .kbd {
-    @apply rounded-[5px] bg-selected px-1.5 py-0.5 font-mono text-[10.5px] leading-none text-muted;
+    @apply rounded-[5px] bg-selected px-[7px] py-[3px] font-mono text-[10.5px] leading-none tracking-normal text-muted;
   }
   .var-pill {
     @apply rounded-[5px] bg-var-soft text-var;
   }
   .segmented {
-    @apply inline-flex gap-0.5 rounded-[9px] border border-border-mid p-0.5;
+    @apply inline-flex gap-0.5 rounded-[8px] border border-border-mid p-0.5;
   }
   .segmented > button {
-    @apply h-[22px] rounded-[7px] px-3 text-[12.5px] font-medium text-muted;
+    @apply h-[22px] rounded-[6px] px-3 text-[12.5px] font-medium text-muted;
   }
   .segmented > button[aria-pressed="true"] {
     @apply bg-selected text-text;

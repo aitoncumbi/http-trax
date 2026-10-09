@@ -86,9 +86,32 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** Prepended to HTML previews: no scripts (sandbox), no outside requests, links can't navigate. */
+const PREVIEW_HEAD =
+  '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; font-src data:"><base target="_blank">';
+
+function HtmlPreview({ html, url }: { html: string; url: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2 px-5 pt-2 pb-4">
+      <div className="flex min-h-[160px] flex-1 flex-col overflow-hidden rounded-[10px] border border-border-mid">
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border-mid bg-sunken px-3">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-faint" aria-hidden>
+            <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+            <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+          </svg>
+          <span className="min-w-0 truncate font-mono text-[12px] text-faint">{url}</span>
+        </div>
+        <iframe title="HTML preview" sandbox="" srcDoc={PREVIEW_HEAD + html} className="min-h-0 w-full flex-1 bg-white" />
+      </div>
+      <div className="text-[12px] text-faint">Rendered in a sandbox. Scripts and outside requests are blocked.</div>
+    </div>
+  );
+}
+
 function BodyView({ response }: { response: ResponseData }) {
-  const [mode, setMode] = useState<"pretty" | "raw">("pretty");
   const ct = contentType(response);
+  const isHtml = ct.includes("text/html") || (!ct && /^\s*<(!doctype html|html)/i.test(response.body));
+  const [mode, setMode] = useState<"pretty" | "raw" | "preview">(isHtml ? "preview" : "pretty");
   if (response.bodyBase64) {
     if (ct.startsWith("image/")) {
       return (
@@ -106,10 +129,11 @@ function BodyView({ response }: { response: ResponseData }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2.5 px-5 pt-2.5 pb-1">
-        <Pills
+        <Pills<"pretty" | "raw" | "preview">
           options={[
             { id: "pretty", label: "Pretty" },
             { id: "raw", label: "Raw" },
+            ...(isHtml ? [{ id: "preview" as const, label: "Preview" }] : []),
           ]}
           value={mode}
           onChange={setMode}
@@ -117,8 +141,10 @@ function BodyView({ response }: { response: ResponseData }) {
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">{ct}</span>
         <CopyButton text={response.body} />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">
-        {mode === "pretty" ? (
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+        {mode === "preview" ? (
+          <HtmlPreview html={response.body} url={response.url} />
+        ) : mode === "pretty" ? (
           <CodeEditor value={pretty} language={lang} readOnly wrap />
         ) : (
           <pre className="px-5 py-3 font-mono text-[13px] leading-[21px] break-all whitespace-pre-wrap text-muted">{response.body}</pre>

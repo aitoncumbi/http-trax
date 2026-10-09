@@ -183,13 +183,19 @@ export function envTone(name: string | null | undefined): string {
 }
 
 export function initials(name: string): string {
-  const words = name.replace(/[^\p{L}\p{N}\s]/gu, " ").trim().split(/\s+/).filter(Boolean);
+  // "Northwind (client)" → NW: parenthetical notes aren't part of the name.
+  const words = name
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
   return (words[0] ?? "?").slice(0, 2).toUpperCase();
 }
 
 const AVATAR_TONES = [
-  { bg: "rgba(91,147,255,0.18)", fg: "var(--accent-text-2)" },
+  { bg: "rgba(94,106,210,0.22)", fg: "var(--accent-text-2)" },
   { bg: "rgba(195,155,255,0.16)", fg: "var(--var)" },
   { bg: "rgba(95,211,154,0.16)", fg: "var(--ok)" },
   { bg: "rgba(240,180,92,0.16)", fg: "var(--warn)" },

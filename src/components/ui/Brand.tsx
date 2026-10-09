@@ -16,8 +16,8 @@ export function CourionMark({ size = 22 }: { size?: number }) {
           <path d="M6.6 15.4 2 18.8 2.4 14.4 6.2 12.8z" />
         </g>
         <path d="M10.6 18.2v2.3M13.4 17.8v2.5" fill="none" stroke="#ffffff" strokeWidth="1.3" strokeLinecap="round" />
-        <circle cx="17.6" cy="9.1" r="0.6" fill="#2f6df6" />
-        <path d="M7.8 13.4Q11.4 16.2 15.4 12.8" fill="none" stroke="#2f6df6" strokeWidth="1.1" strokeLinecap="round" />
+        <circle cx="17.6" cy="9.1" r="0.6" style={{ fill: "var(--accent)" }} />
+        <path d="M7.8 13.4Q11.4 16.2 15.4 12.8" fill="none" style={{ stroke: "var(--accent)" }} strokeWidth="1.1" strokeLinecap="round" />
       </svg>
     </span>
   );
@@ -60,7 +60,7 @@ export function WorkspaceAvatar({ id, name, size = 20, local }: { id: string; na
       style={{
         width: size,
         height: size,
-        borderRadius: size > 24 ? 9 : 5,
+        borderRadius: size > 24 ? 9 : 6,
         background: tone.bg,
         color: tone.fg,
         fontSize: size > 24 ? 12 : 10,

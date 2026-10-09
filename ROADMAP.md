@@ -62,9 +62,20 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [x] Local run history (app and MCP runs), grouped by day
 - [x] Full-width source control view with semantic "what changed" diffs for requests and environments, raw diffs with line numbers, commit history and a searchable branch menu
 
+## Phase 0.3 — Courion interface, second pass ✅
+
+- [x] Inset-card layout: 32px title strip, rail, sidebar with workspace switcher, search and environment picker
+- [x] Environments view: Sync with Git switch (shared or this machine only) and protected environments with confirmation
+- [x] AI agents view: client setup, connected clients, server details, agent permissions enforced by `trax-mcp`, recent agent activity
+- [x] Source control split between sidebar (changes, commit) and main card (what changed, history)
+- [x] Import Postman collections (v2.0/v2.1) and environments
+- [x] Sandboxed HTML response preview
+- [x] Palette actions (Ctrl+.)
+- [x] Workspace switcher with team size and request counts
+
 ## Phase 1 — Daily-driver polish
 
-- [ ] Import: Postman collection v2.1 and environments, Insomnia, Bruno, OpenAPI 3.x, HAR (single cURL commands are done)
+- [ ] Import: Insomnia, Bruno, OpenAPI 3.x, HAR (cURL and Postman are done); Postman example responses and OAuth 2.0 settings
 - [ ] Export: cURL and code snippets (fetch, axios, Python requests, Go, Rust)
 - [ ] Search history and "restore as request"
 - [ ] Cookie jar per workspace, with an editor
@@ -72,7 +83,6 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [ ] Variable autocomplete and hover-to-preview resolved values in the URL bar and editors
 - [ ] Response tools: search, JSONPath/JMESPath filter, word wrap toggle, save body to file, large-response virtualization
 - [ ] Configurable keyboard shortcuts
-- [ ] Protected environments: confirm before sending to an environment marked protected (for example production)
 - [ ] Finish the Courion rename: installers, binaries, MCP server name, and a `courion.*` alias for the script API
 - [ ] Proxy settings, custom CA certificates, client certificates (mTLS)
 - [ ] More auth: OAuth 2.0 (authorization code + PKCE, client credentials, device code) with token refresh, Digest, AWS SigV4, NTLM

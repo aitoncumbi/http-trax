@@ -35,7 +35,7 @@ export function Welcome() {
         </p>
         <div className="-mx-3.5 mt-6">
           <Action icon={<Plus size={16} strokeWidth={1.6} />} title="New request" text="In the open collection" kbd="Ctrl N" onClick={() => void newRequestHere()} />
-          <Action icon={<Import size={16} strokeWidth={1.5} />} title="Import from cURL" text="Paste a command, get a request" onClick={showImportDialog} />
+          <Action icon={<Import size={16} strokeWidth={1.5} />} title="Import from cURL" text="Paste a command, get a request" onClick={() => showImportDialog()} />
           <Action icon={<FolderOpen size={16} strokeWidth={1.5} />} title="New collection" text="Group the requests for one API" onClick={() => void createCollection()} />
           <Action icon={<Bot size={16} strokeWidth={1.5} />} title="Connect an AI agent" text="Let it register and test the endpoints it builds" onClick={() => setView("mcp")} />
           <Action icon={<GitBranch size={16} strokeWidth={1.5} />} title="Source control" text="Commit, pull, push and review with your team" onClick={() => setView("git")} />
