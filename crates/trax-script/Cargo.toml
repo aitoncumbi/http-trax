@@ -1,0 +1,14 @@
+[package]
+name = "trax-script"
+description = "Sandboxed JavaScript runtime for http-trax pre-request and post-response scripts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+boa_engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

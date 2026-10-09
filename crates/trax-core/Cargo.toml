@@ -1,0 +1,27 @@
+[package]
+name = "trax-core"
+description = "Workspaces, collections, environments, storage and the request runner for http-trax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trax-script.workspace = true
+base64.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock = "0.6"

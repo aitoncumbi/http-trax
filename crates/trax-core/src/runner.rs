@@ -1,0 +1,848 @@
+//! Executes requests: inheritance, scripts, variables, auth, HTTP.
+//!
+//! Order of operations (mirrors Postman so imported habits carry over):
+//!
+//! 1. Merge headers from collection → folders → request.
+//! 2. Run pre-request scripts, collection first. Scripts see the request with
+//!    `{{placeholders}}` intact and can change it or set variables.
+//! 3. Substitute variables (runtime > environment > collection > workspace).
+//! 4. Apply auth (an explicit `Authorization` header wins).
+//! 5. Send.
+//! 6. Run post-response scripts, collection first; collect tests and logs.
+//! 7. Persist variable changes to the workspace's local state.
+
+use std::collections::BTreeMap;
+use std::time::Instant;
+
+use base64::Engine as _;
+
+use crate::error::{Error, Result};
+use crate::http::{self, HttpRequest, PreparedBody, PreparedPart};
+use crate::interpolate::{interpolate, unresolved};
+use crate::model::*;
+use crate::workspace::Workspace;
+
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    /// Environment id or name.
+    pub environment: Option<String>,
+    /// Extra variables for this run only (highest precedence, never persisted).
+    pub variables: BTreeMap<String, String>,
+    /// Write variable changes made by scripts back to local state.
+    pub persist: bool,
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            environment: None,
+            variables: BTreeMap::new(),
+            persist: true,
+        }
+    }
+}
+
+/// Variable state for one run (or one collection run).
+struct Session {
+    workspace_vars: BTreeMap<String, String>,
+    env_id: Option<String>,
+    env_name: String,
+    env: BTreeMap<String, String>,
+    runtime: BTreeMap<String, String>,
+    env_delta: BTreeMap<String, Option<String>>,
+    var_delta: BTreeMap<String, Option<String>>,
+}
+
+impl Session {
+    fn load(ws: &Workspace, opts: &RunOptions) -> Result<Self> {
+        let manifest = ws.manifest()?;
+        let workspace_vars = enabled_vars(&manifest.variables);
+        let (env_id, env_name, env) = match &opts.environment {
+            Some(needle) if !needle.is_empty() => {
+                let view = ws.find_environment(needle)?;
+                let (name, vars) = ws.effective_environment(&view.environment.id)?;
+                (Some(view.environment.id), name, vars)
+            }
+            _ => (None, String::new(), BTreeMap::new()),
+        };
+        let mut runtime = ws.local_state()?.runtime_variables;
+        runtime.extend(opts.variables.clone());
+        Ok(Self {
+            workspace_vars,
+            env_id,
+            env_name,
+            env,
+            runtime,
+            env_delta: BTreeMap::new(),
+            var_delta: BTreeMap::new(),
+        })
+    }
+
+    fn scope(&self, collection_vars: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let mut all = self.workspace_vars.clone();
+        all.extend(collection_vars.clone());
+        all.extend(self.env.clone());
+        all.extend(self.runtime.clone());
+        all
+    }
+
+    fn apply(&mut self, out: &trax_script::ScriptOutput) {
+        for (k, v) in &out.environment_changes {
+            match v {
+                Some(v) => self.env.insert(k.clone(), v.clone()),
+                None => self.env.remove(k),
+            };
+            self.env_delta.insert(k.clone(), v.clone());
+        }
+        for (k, v) in &out.variable_changes {
+            match v {
+                Some(v) => self.runtime.insert(k.clone(), v.clone()),
+                None => self.runtime.remove(k),
+            };
+            self.var_delta.insert(k.clone(), v.clone());
+        }
+    }
+
+    fn persist(&self, ws: &Workspace) -> Result<()> {
+        if self.env_delta.is_empty() && self.var_delta.is_empty() {
+            return Ok(());
+        }
+        ws.update_local_state(|state| {
+            // Without an active environment, `trax.env.set` falls back to
+            // runtime variables so the value isn't silently lost.
+            let env_target = match &self.env_id {
+                Some(id) => Some(state.overrides.entry(id.clone()).or_default()),
+                None => None,
+            };
+            match env_target {
+                Some(overrides) => apply_delta(overrides, &self.env_delta),
+                None => apply_delta(&mut state.runtime_variables, &self.env_delta),
+            }
+            apply_delta(&mut state.runtime_variables, &self.var_delta);
+        })
+    }
+}
+
+fn apply_delta(map: &mut BTreeMap<String, String>, delta: &BTreeMap<String, Option<String>>) {
+    for (k, v) in delta {
+        match v {
+            Some(v) => map.insert(k.clone(), v.clone()),
+            None => map.remove(k),
+        };
+    }
+}
+
+fn enabled_vars(vars: &[Variable]) -> BTreeMap<String, String> {
+    vars.iter()
+        .filter(|v| v.enabled && !v.key.is_empty())
+        .map(|v| (v.key.clone(), v.value.clone()))
+        .collect()
+}
+
+fn source_label(ancestors: &[GroupMeta], index: usize) -> String {
+    if index == 0 {
+        format!("collection:{}", ancestors[0].name)
+    } else {
+        format!("folder:{}", ancestors[index].name)
+    }
+}
+
+fn to_script_headers(headers: &[Header]) -> Vec<trax_script::Header> {
+    headers
+        .iter()
+        .map(|h| trax_script::Header::new(h.key.clone(), h.value.clone()))
+        .collect()
+}
+
+fn set_header(headers: &mut Vec<Header>, key: &str, value: String) {
+    match headers.iter_mut().find(|h| h.key.eq_ignore_ascii_case(key)) {
+        Some(h) => h.value = value,
+        None => headers.push(Header::new(key, value)),
+    }
+}
+
+fn has_header(headers: &[Header], key: &str) -> bool {
+    headers.iter().any(|h| h.key.eq_ignore_ascii_case(key))
+}
+
+/// Headers from collection → folders → request; later levels override.
+fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
+    let mut out = Vec::new();
+    let levels = ancestors
+        .iter()
+        .map(|a| &a.headers)
+        .chain(std::iter::once(&request.headers));
+    for list in levels {
+        for kv in list.iter().filter(|kv| kv.enabled && !kv.key.trim().is_empty()) {
+            set_header(&mut out, kv.key.trim(), kv.value.clone());
+        }
+    }
+    out
+}
+
+fn effective_auth(request: &Request, ancestors: &[GroupMeta]) -> Auth {
+    if !request.auth.is_inherit() {
+        return request.auth.clone();
+    }
+    ancestors
+        .iter()
+        .rev()
+        .map(|a| &a.auth)
+        .find(|a| !a.is_inherit())
+        .cloned()
+        .unwrap_or(Auth::None)
+}
+
+/// Text body for text-like modes; scripts can read and replace it.
+fn initial_body(body: &Body) -> Option<String> {
+    match body {
+        Body::Json { text } | Body::Xml { text } | Body::Text { text, .. } => Some(text.clone()),
+        _ => None,
+    }
+}
+
+fn default_content_type(body: &Body) -> Option<&str> {
+    match body {
+        Body::Json { .. } | Body::Graphql { .. } => Some("application/json"),
+        Body::Xml { .. } => Some("application/xml"),
+        Body::Text { content_type, .. } => Some(content_type.as_deref().unwrap_or("text/plain")),
+        Body::FormUrlencoded { .. } => Some("application/x-www-form-urlencoded"),
+        Body::Multipart { .. } | Body::None => None,
+    }
+}
+
+fn append_query(url: &mut String, pairs: &[(String, String)]) {
+    if pairs.is_empty() {
+        return;
+    }
+    let query = pairs
+        .iter()
+        .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
+        .collect::<Vec<_>>()
+        .join("&");
+    let (base, fragment) = match url.find('#') {
+        Some(i) => (url[..i].to_string(), url[i..].to_string()),
+        None => (url.clone(), String::new()),
+    };
+    let sep = if !base.contains('?') {
+        "?"
+    } else if base.ends_with('?') || base.ends_with('&') {
+        ""
+    } else {
+        "&"
+    };
+    *url = format!("{base}{sep}{query}{fragment}");
+}
+
+fn encode(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// Build the body from the request model after variables are resolved.
+fn build_body(ws: &Workspace, body: &Body, vars: &BTreeMap<String, String>) -> std::result::Result<PreparedBody, String> {
+    Ok(match body {
+        Body::None => PreparedBody::None,
+        Body::Json { text } | Body::Xml { text } | Body::Text { text, .. } => {
+            PreparedBody::Text(interpolate(text, vars))
+        }
+        Body::FormUrlencoded { fields } => PreparedBody::Text(
+            fields
+                .iter()
+                .filter(|f| f.enabled && !f.key.is_empty())
+                .map(|f| {
+                    format!(
+                        "{}={}",
+                        encode(&interpolate(&f.key, vars)),
+                        encode(&interpolate(&f.value, vars))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("&"),
+        ),
+        Body::Multipart { fields } => PreparedBody::Multipart(
+            fields
+                .iter()
+                .filter(|f| f.enabled && !f.key.is_empty())
+                .map(|f| {
+                    let value = interpolate(&f.value, vars);
+                    let file = f.is_file.then(|| {
+                        let p = std::path::PathBuf::from(&value);
+                        if p.is_absolute() {
+                            p
+                        } else {
+                            ws.root().join(p)
+                        }
+                    });
+                    PreparedPart {
+                        name: interpolate(&f.key, vars),
+                        value,
+                        file,
+                    }
+                })
+                .collect(),
+        ),
+        Body::Graphql { query, variables } => {
+            let vars_text = interpolate(variables, vars);
+            let variables: serde_json::Value = if vars_text.trim().is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_str(&vars_text)
+                    .map_err(|e| format!("GraphQL variables are not valid JSON: {e}"))?
+            };
+            PreparedBody::Text(
+                serde_json::json!({ "query": interpolate(query, vars), "variables": variables })
+                    .to_string(),
+            )
+        }
+    })
+}
+
+async fn run_script(
+    source: String,
+    input: trax_script::ScriptInput,
+) -> std::result::Result<trax_script::ScriptOutput, String> {
+    tokio::task::spawn_blocking(move || trax_script::run(&source, &input))
+        .await
+        .map_err(|e| format!("script task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+fn script_info(request: &Request, ancestors: &[GroupMeta], env_name: &str) -> trax_script::ScriptInfo {
+    trax_script::ScriptInfo {
+        request_name: request.name.clone(),
+        request_id: request.id.clone(),
+        collection_name: ancestors.first().map(|a| a.name.clone()).unwrap_or_default(),
+        environment_name: env_name.to_string(),
+    }
+}
+
+/// Run one request inside a session. Never fails: problems end up in the result.
+async fn execute(
+    ws: &Workspace,
+    session: &mut Session,
+    request: &Request,
+    ancestors: &[GroupMeta],
+) -> RunResult {
+    let mut result = RunResult {
+        id: new_id(),
+        request_id: (!request.id.is_empty()).then(|| request.id.clone()),
+        request_name: request.name.clone(),
+        started_at: chrono::Utc::now(),
+        request: SentRequest::default(),
+        response: None,
+        error: None,
+        tests: Vec::new(),
+        logs: Vec::new(),
+        script_errors: Vec::new(),
+        skipped: false,
+    };
+    let collection_vars = {
+        let mut v = BTreeMap::new();
+        if let Some(c) = ancestors.first() {
+            v = enabled_vars(&c.variables);
+        }
+        v
+    };
+
+    // Scripts in execution order: collection, folders, request.
+    let mut pre = Vec::new();
+    let mut post = Vec::new();
+    for (i, a) in ancestors.iter().enumerate() {
+        if !a.scripts.pre_request.trim().is_empty() {
+            pre.push((source_label(ancestors, i), a.scripts.pre_request.clone()));
+        }
+        if !a.scripts.post_response.trim().is_empty() {
+            post.push((source_label(ancestors, i), a.scripts.post_response.clone()));
+        }
+    }
+    if !request.scripts.pre_request.trim().is_empty() {
+        pre.push(("request".to_string(), request.scripts.pre_request.clone()));
+    }
+    if !request.scripts.post_response.trim().is_empty() {
+        post.push(("request".to_string(), request.scripts.post_response.clone()));
+    }
+
+    // 1. Request as scripts first see it.
+    let mut headers = merged_headers(request, ancestors);
+    if let Some(ct) = default_content_type(&request.body) {
+        if !has_header(&headers, "content-type") {
+            headers.push(Header::new("Content-Type", ct));
+        }
+    }
+    let mut url = request.url.trim().to_string();
+    let params: Vec<(String, String)> = request
+        .params
+        .iter()
+        .filter(|p| p.enabled && !p.key.is_empty())
+        .map(|p| (p.key.clone(), p.value.clone()))
+        .collect();
+    append_query(&mut url, &params);
+    let body0 = initial_body(&request.body);
+    let mut script_req = trax_script::ScriptRequest {
+        method: request.method.clone(),
+        url,
+        headers: to_script_headers(&headers),
+        body: body0.clone(),
+    };
+    let info = script_info(request, ancestors, &session.env_name);
+
+    // 2. Pre-request scripts.
+    for (source, code) in pre {
+        let mut input = trax_script::ScriptInput::new(trax_script::Phase::PreRequest, script_req.clone());
+        input.environment = session.env.clone();
+        input.variables = session.runtime.clone();
+        input.collection_variables = {
+            let mut v = session.workspace_vars.clone();
+            v.extend(collection_vars.clone());
+            v
+        };
+        input.info = info.clone();
+        match run_script(code, input).await {
+            Ok(out) => {
+                session.apply(&out);
+                collect(&mut result, &out, "pre-request", &source);
+                script_req = out.request.clone();
+                if let Some(err) = out.error {
+                    result.script_errors.push(ScriptError {
+                        phase: "pre-request".into(),
+                        source,
+                        message: err,
+                    });
+                }
+                if out.skip_request {
+                    result.skipped = true;
+                }
+            }
+            Err(message) => result.script_errors.push(ScriptError {
+                phase: "pre-request".into(),
+                source,
+                message,
+            }),
+        }
+        if !result.script_errors.is_empty() || result.skipped {
+            break;
+        }
+    }
+
+    // 3. Variables.
+    let vars = session.scope(&collection_vars);
+    let mut sent = SentRequest {
+        method: script_req.method.trim().to_uppercase(),
+        url: interpolate(&script_req.url, &vars),
+        headers: script_req
+            .headers
+            .iter()
+            .map(|h| Header::new(interpolate(&h.key, &vars), interpolate(&h.value, &vars)))
+            .collect(),
+        body: None,
+    };
+    let missing: Vec<String> = unresolved(&script_req.url, &vars)
+        .into_iter()
+        .chain(script_req.headers.iter().flat_map(|h| unresolved(&h.value, &vars)))
+        .collect();
+    for name in missing {
+        result.logs.push(LogEntry {
+            level: "warn".into(),
+            message: format!("unresolved variable {{{{{name}}}}}"),
+            phase: "prepare".into(),
+            source: "runner".into(),
+        });
+    }
+
+    // 4. Auth.
+    match effective_auth(request, ancestors) {
+        Auth::Bearer { token } if !has_header(&sent.headers, "authorization") => {
+            sent.headers.push(Header::new("Authorization", format!("Bearer {}", interpolate(&token, &vars))));
+        }
+        Auth::Basic { username, password } if !has_header(&sent.headers, "authorization") => {
+            let raw = format!("{}:{}", interpolate(&username, &vars), interpolate(&password, &vars));
+            let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
+            sent.headers.push(Header::new("Authorization", format!("Basic {encoded}")));
+        }
+        Auth::ApiKey { key, value, location } if !key.is_empty() => {
+            let key = interpolate(&key, &vars);
+            let value = interpolate(&value, &vars);
+            match location {
+                ApiKeyLocation::Header if !has_header(&sent.headers, &key) => {
+                    sent.headers.push(Header::new(key, value))
+                }
+                ApiKeyLocation::Query => append_query(&mut sent.url, &[(encode(&key), encode(&value))]),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    // Body: a script replacement wins, otherwise build from the model.
+    let body = if script_req.body != body0 {
+        match &script_req.body {
+            Some(text) => Ok(PreparedBody::Text(interpolate(text, &vars))),
+            None => Ok(PreparedBody::None),
+        }
+    } else {
+        build_body(ws, &request.body, &vars)
+    };
+    let body = match body {
+        Ok(b) => b,
+        Err(e) => {
+            result.error = Some(e);
+            result.request = sent;
+            return result;
+        }
+    };
+    if matches!(body, PreparedBody::Multipart(_)) {
+        // reqwest sets multipart/form-data with the boundary itself.
+        sent.headers.retain(|h| !h.key.eq_ignore_ascii_case("content-type"));
+    }
+    sent.body = body.describe();
+    result.request = sent.clone();
+
+    if !result.script_errors.is_empty() {
+        result.error = Some("request not sent: pre-request script failed".into());
+        return result;
+    }
+    if result.skipped {
+        return result;
+    }
+
+    // 5. Send.
+    let http_req = HttpRequest {
+        method: sent.method.clone(),
+        url: sent.url.clone(),
+        headers: sent.headers.clone(),
+        body,
+        settings: request.settings.clone(),
+    };
+    let response = match http::send(&http_req).await {
+        Ok(r) => r,
+        Err(e) => {
+            result.error = Some(e);
+            return result;
+        }
+    };
+
+    // 6. Post-response scripts.
+    let script_response = trax_script::ScriptResponse {
+        status: response.status,
+        status_text: response.status_text.clone(),
+        headers: to_script_headers(&response.headers),
+        body: if response.body_base64.is_some() {
+            String::new()
+        } else {
+            response.body.clone()
+        },
+        time_ms: response.time_ms,
+        size: response.size,
+    };
+    let final_request = trax_script::ScriptRequest {
+        method: sent.method.clone(),
+        url: sent.url.clone(),
+        headers: to_script_headers(&sent.headers),
+        body: sent.body.clone(),
+    };
+    for (source, code) in post {
+        let mut input = trax_script::ScriptInput::new(trax_script::Phase::PostResponse, final_request.clone());
+        input.response = Some(script_response.clone());
+        input.environment = session.env.clone();
+        input.variables = session.runtime.clone();
+        input.collection_variables = {
+            let mut v = session.workspace_vars.clone();
+            v.extend(collection_vars.clone());
+            v
+        };
+        input.info = info.clone();
+        match run_script(code, input).await {
+            Ok(out) => {
+                session.apply(&out);
+                collect(&mut result, &out, "post-response", &source);
+                if let Some(err) = out.error {
+                    result.script_errors.push(ScriptError {
+                        phase: "post-response".into(),
+                        source,
+                        message: err,
+                    });
+                }
+            }
+            Err(message) => result.script_errors.push(ScriptError {
+                phase: "post-response".into(),
+                source,
+                message,
+            }),
+        }
+    }
+    result.response = Some(response);
+    result
+}
+
+fn collect(result: &mut RunResult, out: &trax_script::ScriptOutput, phase: &str, source: &str) {
+    for t in &out.tests {
+        result.tests.push(TestResult {
+            name: t.name.clone(),
+            passed: t.passed,
+            skipped: t.skipped,
+            error: t.error.clone(),
+            source: source.to_string(),
+        });
+    }
+    for l in &out.logs {
+        result.logs.push(LogEntry {
+            level: l.level.clone(),
+            message: l.message.clone(),
+            phase: phase.to_string(),
+            source: source.to_string(),
+        });
+    }
+}
+
+/// Run a request that may have unsaved edits. Inheritance comes from the
+/// saved request's location, or from `parent_id` for a new request, or
+/// nothing for an ad-hoc request.
+pub async fn run_draft(
+    ws: &Workspace,
+    request: &Request,
+    parent_id: Option<&str>,
+    opts: &RunOptions,
+) -> Result<RunResult> {
+    let ancestors = match ws.request_context(&request.id) {
+        Ok(ctx) => ctx.ancestors,
+        Err(Error::NotFound(_)) => match parent_id {
+            Some(pid) => ws.group_chain(pid)?,
+            None => Vec::new(),
+        },
+        Err(e) => return Err(e),
+    };
+    let mut session = Session::load(ws, opts)?;
+    let result = execute(ws, &mut session, request, &ancestors).await;
+    if opts.persist {
+        session.persist(ws)?;
+    }
+    Ok(result)
+}
+
+/// Run a saved request by id.
+pub async fn run_saved(ws: &Workspace, request_id: &str, opts: &RunOptions) -> Result<RunResult> {
+    let ctx = ws.request_context(request_id)?;
+    let mut session = Session::load(ws, opts)?;
+    let result = execute(ws, &mut session, &ctx.request, &ctx.ancestors).await;
+    if opts.persist {
+        session.persist(ws)?;
+    }
+    Ok(result)
+}
+
+/// Run every request in a collection or folder, in display order. Variables
+/// set by one request are visible to the next.
+pub async fn run_group(
+    ws: &Workspace,
+    group_id: &str,
+    opts: &RunOptions,
+    stop_on_failure: bool,
+) -> Result<(CollectionRunReport, Vec<RunResult>)> {
+    let started = Instant::now();
+    let tree = ws.tree()?;
+    let group = tree
+        .collections
+        .iter()
+        .find_map(|c| c.find_group(group_id))
+        .ok_or_else(|| Error::NotFound(format!("collection or folder {group_id}")))?
+        .clone();
+    let mut session = Session::load(ws, opts)?;
+    let mut items = Vec::new();
+    let mut results = Vec::new();
+    for summary in group.requests() {
+        let ctx = ws.request_context(&summary.id)?;
+        let result = execute(ws, &mut session, &ctx.request, &ctx.ancestors).await;
+        let ok = result.ok() && !result.skipped;
+        items.push(CollectionRunItem {
+            request_id: summary.id.clone(),
+            name: summary.name.clone(),
+            method: ctx.request.method.clone(),
+            url: result.request.url.clone(),
+            status: result.response.as_ref().map(|r| r.status),
+            time_ms: result.response.as_ref().map(|r| r.time_ms),
+            passed: result.tests_passed(),
+            failed: result.tests_failed(),
+            error: result
+                .error
+                .clone()
+                .or_else(|| result.script_errors.first().map(|e| e.message.clone())),
+            ok: ok || result.skipped,
+        });
+        results.push(result);
+        if stop_on_failure && !ok {
+            break;
+        }
+    }
+    if opts.persist {
+        session.persist(ws)?;
+    }
+    let report = CollectionRunReport {
+        group_id: group.meta.id.clone(),
+        group_name: group.meta.name.clone(),
+        environment: session.env_id.as_ref().map(|_| session.env_name.clone()),
+        total: items.len(),
+        succeeded: items.iter().filter(|i| i.ok).count(),
+        failed: items.iter().filter(|i| !i.ok).count(),
+        tests_passed: items.iter().map(|i| i.passed).sum(),
+        tests_failed: items.iter().map(|i| i.failed).sum(),
+        duration_ms: started.elapsed().as_millis() as u64,
+        items,
+    };
+    Ok((report, results))
+}
+
+/// Save the response of a run against its request.
+pub fn save_run_response(ws: &Workspace, request_id: &str, name: &str, run: &RunResult) -> Result<SavedResponse> {
+    let response = run
+        .response
+        .clone()
+        .ok_or_else(|| Error::Invalid("the run has no response to save".into()))?;
+    let saved = SavedResponse {
+        id: new_id(),
+        request_id: request_id.to_string(),
+        name: if name.trim().is_empty() {
+            format!("{} {}", response.status, response.status_text).trim().to_string()
+        } else {
+            name.trim().to_string()
+        },
+        saved_at: chrono::Utc::now(),
+        request: run.request.clone(),
+        response,
+    };
+    ws.save_response(&saved)?;
+    Ok(saved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{body_string, header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn setup() -> (tempfile::TempDir, Workspace, MockServer, GroupMeta, Environment) {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::init(dir.path(), "Test").unwrap();
+        let server = MockServer::start().await;
+        let col = ws.create_collection("Users").unwrap();
+        let mut meta = col.meta.clone();
+        meta.headers.push(KeyValue::new("X-Team", "core"));
+        meta.auth = Auth::Bearer { token: "{{token}}".into() };
+        meta.variables.push(Variable::new("apiVersion", "v1"));
+        ws.update_group(&meta).unwrap();
+        let mut env = Environment::new("Local");
+        env.variables.push(Variable::new("baseUrl", server.uri()));
+        env.variables.push(Variable::new("token", "initial"));
+        let env = ws.save_environment(&env).unwrap();
+        (dir, ws, server, meta, env)
+    }
+
+    fn opts(env: &Environment) -> RunOptions {
+        RunOptions {
+            environment: Some(env.name.clone()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn full_pipeline() {
+        let (_dir, ws, server, col, env) = setup().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/login"))
+            .and(header("x-team", "core"))
+            .and(header("authorization", "Bearer initial"))
+            .and(header("content-type", "application/json"))
+            .and(body_string(r#"{"user":"ada"}"#))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"token": "fresh"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/me"))
+            .and(query_param("verbose", "true"))
+            .and(header("authorization", "Bearer fresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"name": "Ada"})))
+            .mount(&server)
+            .await;
+
+        let mut login = Request::new("Login", "POST", "{{baseUrl}}/{{apiVersion}}/login");
+        login.body = Body::Json { text: r#"{"user":"{{user}}"}"#.into() };
+        login.scripts.pre_request = "trax.vars.set('user', 'ada');".into();
+        login.scripts.post_response = r#"
+            trax.test("logged in", () => expect(trax.response.status).toBe(200));
+            trax.env.set("token", trax.response.json().token);
+        "#
+        .into();
+        let login = ws.create_request(&col.id, login).unwrap();
+
+        let mut me = Request::new("Me", "GET", "{{baseUrl}}/{{apiVersion}}/me");
+        me.params.push(KeyValue::new("verbose", "true"));
+        me.scripts.post_response = r#"
+            trax.test("name", () => expect(trax.response.json().name).toBe("Ada"));
+            console.log("hello", trax.response.status);
+        "#
+        .into();
+        ws.create_request(&col.id, me).unwrap();
+
+        let (report, results) = run_group(&ws, &col.id, &opts(&env), true).await.unwrap();
+        for r in &results {
+            assert!(r.ok(), "{r:#?}");
+        }
+        assert_eq!(report.total, 2);
+        assert_eq!(report.succeeded, 2);
+        assert_eq!(report.tests_passed, 2);
+        assert_eq!(results[1].logs[0].message, "hello 200");
+
+        // The token set by the script is a local override, not a git change.
+        let shared = std::fs::read_to_string(ws.root().join("environments/local.env.yaml")).unwrap();
+        assert!(shared.contains("initial"));
+        let view = ws.environment(&env.id).unwrap();
+        assert_eq!(view.overrides.get("token").map(String::as_str), Some("fresh"));
+        assert_eq!(ws.local_state().unwrap().runtime_variables["user"], "ada");
+
+        // Saving a response.
+        let saved = save_run_response(&ws, &login.id, "", &results[0]).unwrap();
+        assert_eq!(saved.name, "200 OK");
+        assert_eq!(ws.saved_responses(&login.id).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn failing_pre_request_script_blocks_send() {
+        let (_dir, ws, _server, col, env) = setup().await;
+        let mut r = Request::new("Broken", "GET", "{{baseUrl}}/x");
+        r.scripts.pre_request = "throw new Error('nope')".into();
+        let r = ws.create_request(&col.id, r).unwrap();
+        let result = run_saved(&ws, &r.id, &opts(&env)).await.unwrap();
+        assert!(result.response.is_none());
+        assert_eq!(result.script_errors.len(), 1);
+        assert!(result.script_errors[0].message.contains("nope"));
+        assert!(!result.ok());
+    }
+
+    #[tokio::test]
+    async fn draft_with_basic_auth_form_body_and_transport_error() {
+        let (_dir, ws, server, col, env) = setup().await;
+        Mock::given(method("POST"))
+            .and(path("/form"))
+            .and(header("authorization", "Basic dXNlcjpwdw=="))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .and(body_string("a=1+2&b=%26"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        let mut draft = Request::new("Form", "post", "{{baseUrl}}/form");
+        draft.auth = Auth::Basic { username: "user".into(), password: "{{pw}}".into() };
+        draft.body = Body::FormUrlencoded {
+            fields: vec![KeyValue::new("a", "1 2"), KeyValue::new("b", "&")],
+        };
+        let mut o = opts(&env);
+        o.variables.insert("pw".into(), "pw".into());
+        o.persist = false;
+        let result = run_draft(&ws, &draft, Some(&col.id), &o).await.unwrap();
+        assert_eq!(result.response.as_ref().map(|r| r.status), Some(201), "{result:#?}");
+
+        let mut bad = Request::new("Down", "GET", "http://127.0.0.1:9/nothing");
+        bad.settings.timeout_ms = Some(2000);
+        let result = run_draft(&ws, &bad, None, &RunOptions::default()).await.unwrap();
+        assert!(result.error.is_some());
+        assert!(result.response.is_none());
+    }
+}
