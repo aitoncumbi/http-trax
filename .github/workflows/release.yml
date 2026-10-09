@@ -1,0 +1,66 @@
+name: Release
+
+# Push a tag like v0.2.0 to build Linux and Windows installers and attach
+# them to a draft GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-22.04
+            mcp: trax-mcp
+            mcp_asset: trax-mcp-x86_64-unknown-linux-gnu
+          - name: Windows
+            os: windows-latest
+            mcp: trax-mcp.exe
+            mcp_asset: trax-mcp-x86_64-pc-windows-msvc.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: http-trax ${{ github.ref_name }}
+          releaseBody: |
+            Installers for Linux (.deb, .rpm, .AppImage) and Windows (.msi, setup .exe).
+            The `trax-mcp` MCP server ships inside each installer; standalone binaries are attached too.
+          releaseDraft: true
+          prerelease: false
+
+      - name: Attach standalone MCP server
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp "target/release/${{ matrix.mcp }}" "${{ matrix.mcp_asset }}"
+          gh release upload "${{ github.ref_name }}" "${{ matrix.mcp_asset }}" --clobber

@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/trax-core",
+    "crates/trax-script",
+    "crates/trax-git",
+    "crates/trax-mcp",
+    "src-tauri",
+]
+# The Tauri app needs WebKitGTK headers on Linux. Keep plain `cargo test`
+# / `cargo build` at the repo root to the headless crates so contributors
+# (and the MCP server) don't need a desktop toolchain.
+default-members = [
+    "crates/trax-core",
+    "crates/trax-script",
+    "crates/trax-git",
+    "crates/trax-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/aitoncumbi/http-trax"
+rust-version = "1.85"
+
+[workspace.dependencies]
+trax-core = { path = "crates/trax-core" }
+trax-script = { path = "crates/trax-script" }
+trax-git = { path = "crates/trax-git" }
+trax-mcp = { path = "crates/trax-mcp" }
+
+anyhow = "1"
+base64 = "0.22"
+boa_engine = { version = "0.22", default-features = false, features = ["annex-b"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+dirs = "6"
+notify = "8"
+reqwest = { version = "0.13", features = ["gzip", "brotli", "deflate", "multipart", "form"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "io-std", "net", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
