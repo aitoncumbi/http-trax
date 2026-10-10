@@ -52,6 +52,15 @@ pub struct SyncReport {
     pub fetched_at: Option<String>,
     pub checked_at: String,
     pub message: Option<String>,
+    /// Paths changed by incoming commits in this pass (or waiting upstream).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    /// Human-friendly names of requests/environments changed by teammates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_requests: Vec<String>,
+    /// Distinct author names of incoming commits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +96,9 @@ fn report(state: SyncState, message: Option<String>) -> SyncReport {
         fetched_at: None,
         checked_at: now(),
         message,
+        changed_files: Vec::new(),
+        changed_requests: Vec::new(),
+        authors: Vec::new(),
     }
 }
 
@@ -136,12 +148,60 @@ fn classify(e: &GitError) -> SyncState {
     }
 }
 
+fn summarize_item_label(path: &str, root: &Path) -> Option<String> {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    if let Some(stem) = base.strip_suffix(".req.yaml") {
+        // Try reading `name:` from the request file on disk if available.
+        if let Ok(text) = std::fs::read_to_string(root.join(path)) {
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("name:") {
+                    let name = rest.trim().trim_matches('"').trim_matches('\'');
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        return Some(stem.to_string());
+    }
+    if let Some(stem) = base.strip_suffix(".env.yaml") {
+        return Some(format!("{stem} (env)"));
+    }
+    if base == "collection.yaml" {
+        let col = path.split('/').nth_back(1).unwrap_or("collection");
+        return Some(format!("{col} (collection)"));
+    }
+    None
+}
+
+fn collect_incoming_summary(git: &Git, from_rev: &str, to_rev: &str, r: &mut SyncReport) {
+    let root = git.toplevel().unwrap_or_else(|_| git.dir().to_path_buf());
+    if let Ok(files) = git.changed_files_between(from_rev, to_rev) {
+        for f in files {
+            if let Some(label) = summarize_item_label(&f.path, &root) {
+                if !r.changed_requests.contains(&label) {
+                    r.changed_requests.push(label);
+                }
+            }
+            r.changed_files.push(f.path);
+        }
+    }
+    if let Ok(commits) = git.log(Some(&format!("{from_rev}..{to_rev}")), 50, None) {
+        for c in commits {
+            if !c.author_name.is_empty() && !r.authors.contains(&c.author_name) {
+                r.authors.push(c.author_name);
+            }
+        }
+    }
+}
+
 /// Fill in branch state and fast-forward if allowed and safe.
 fn finish(git: &Git, mut r: SyncReport, auto_pull: bool) -> SyncReport {
     let mut status = match git.status() {
         Ok(s) => s,
         Err(e) => return report(SyncState::Error, Some(e.to_string())),
     };
+    let head_before = status.head.clone();
     if auto_pull
         && status.behind > 0
         && status.ahead == 0
@@ -154,12 +214,17 @@ fn finish(git: &Git, mut r: SyncReport, auto_pull: bool) -> SyncReport {
         match git.git(&["merge", "--ff-only", "@{u}"]) {
             Ok(_) => {
                 r.pulled = before;
+                if let Some(old_oid) = head_before.as_deref() {
+                    collect_incoming_summary(git, old_oid, "HEAD", &mut r);
+                }
                 if let Ok(s) = git.status() {
                     status = s;
                 }
             }
             Err(e) => r.message = Some(format!("auto-pull skipped: {e}")),
         }
+    } else if status.behind > 0 && status.upstream.is_some() {
+        collect_incoming_summary(git, "HEAD", "@{u}", &mut r);
     }
     r.branch = status.branch.clone();
     r.upstream = status.upstream.clone();

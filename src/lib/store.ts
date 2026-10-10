@@ -3,6 +3,7 @@
 import { create } from "zustand";
 
 import { api, errorMessage, onEvent } from "./api";
+import { teamChanges } from "./review";
 import type {
   AppInfo,
   CollectionRun,
@@ -86,10 +87,12 @@ export interface Toast {
   message: string;
 }
 
+export type WorkspaceDialogMode = "create" | "open" | "clone" | "join";
+
 export type Dialog =
   | { kind: "prompt"; title: string; label?: string; initial?: string; confirm?: string; resolve: (v: string | null) => void }
   | { kind: "confirm"; title: string; message: string; confirm?: string; danger?: boolean; resolve: (v: boolean) => void }
-  | { kind: "workspace"; mode: "create" | "open" | "clone" }
+  | { kind: "workspace"; mode: WorkspaceDialogMode }
   | { kind: "import"; tab?: "curl" | "postman" }
   | { kind: "code"; request: Request; parentId: string | null }
   | { kind: "cookies"; domain?: string };
@@ -188,7 +191,7 @@ interface Actions {
   dismissToast: (id: string) => void;
   prompt: (opts: { title: string; label?: string; initial?: string; confirm?: string }) => Promise<string | null>;
   confirm: (opts: { title: string; message: string; confirm?: string; danger?: boolean }) => Promise<boolean>;
-  showWorkspaceDialog: (mode: "create" | "open" | "clone") => void;
+  showWorkspaceDialog: (mode: WorkspaceDialogMode) => void;
   showImportDialog: (tab?: "curl" | "postman") => void;
   /** Code snippets for an open tab's draft, or a saved request. */
   showCodeDialog: (target: { tabId?: string; requestId?: string }) => Promise<void>;
@@ -314,13 +317,20 @@ export const useStore = create<Store>()((set, get) => {
       unsubscribers.forEach((u) => u());
       unsubscribers = await Promise.all([
         onEvent<{ workspaceId: string; report: SyncReport }>("sync-status", ({ workspaceId, report }) => {
+          const before = get().sync[workspaceId];
           set((s) => ({ sync: { ...s.sync, [workspaceId]: report } }));
-          if (workspaceId === wsId()) get().bumpGit();
+          if (workspaceId !== wsId()) return;
+          get().bumpGit();
+          // New teammate commits waiting upstream (auto-pull didn't take them).
+          if (report.pulled === 0 && report.behind > (before?.behind ?? 0) && report.changedRequests?.length) {
+            get().toast("info", `${teamChanges(report)}. Pull to get them.`);
+          }
         }),
         onEvent<{ workspaceId: string; reason: string }>("workspace-changed", ({ workspaceId, reason }) => {
           if (reason === "pulled" && workspaceId === wsId()) {
             const report = get().sync[workspaceId];
-            get().toast("info", `Pulled ${report?.pulled ?? "new"} commit(s) from your team`);
+            const commits = `${report?.pulled ?? "New"} commit${report?.pulled === 1 ? "" : "s"}`;
+            get().toast("info", report?.changedRequests?.length ? `Pulled ${commits}. ${teamChanges(report)}` : `Pulled ${commits} from your team`);
           }
           void get().onWorkspaceChanged(workspaceId);
         }),

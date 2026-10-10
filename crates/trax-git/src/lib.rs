@@ -86,6 +86,17 @@ pub struct Branch {
     pub last_commit_date: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignatureStatus {
+    Good,
+    Untrusted,
+    Bad,
+    Expired,
+    Revoked,
+    CannotCheck,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
@@ -98,6 +109,66 @@ pub struct Commit {
     pub subject: String,
     pub parents: Vec<String>,
     pub refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_status: Option<SignatureStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    pub index: usize,
+    pub reference: String,
+    pub message: String,
+    pub date: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub name: String,
+    pub hash: String,
+    pub short_hash: String,
+    pub message: Option<String>,
+    pub date: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SigningFormat {
+    #[default]
+    Gpg,
+    Ssh,
+    X509,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningSettings {
+    pub enabled: bool,
+    pub format: SigningFormat,
+    pub signing_key: Option<String>,
+    pub program: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparseCheckoutStatus {
+    pub enabled: bool,
+    pub cone: bool,
+    pub patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictStages {
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+    pub worktree: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +262,29 @@ pub fn clone(url: &str, dest: &Path, branch: Option<&str>) -> Result<Git> {
     args.extend([url, dest_s.as_str()]);
     run_git(parent, &args, &Opts::network())?;
     Ok(Git::new(dest))
+}
+
+/// Clone `url` into `dest` with sparse-checkout restricted to `patterns` (ideal for large monorepos).
+pub fn clone_sparse(
+    url: &str,
+    dest: &Path,
+    branch: Option<&str>,
+    patterns: &[String],
+) -> Result<Git> {
+    let parent = dest.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|e| GitError::Io(e.to_string()))?;
+    let dest_s = dest.to_string_lossy().into_owned();
+    let mut args = vec!["clone", "--filter=blob:none", "--sparse", "--progress"];
+    if let Some(b) = branch {
+        args.extend(["--branch", b]);
+    }
+    args.extend([url, dest_s.as_str()]);
+    run_git(parent, &args, &Opts::network())?;
+    let git = Git::new(dest);
+    if !patterns.is_empty() {
+        git.sparse_checkout_set(patterns, true)?;
+    }
+    Ok(git)
 }
 
 #[derive(Debug, Clone)]
@@ -600,7 +694,7 @@ impl Git {
         let limit = format!("-n{}", limit.max(1));
         let mut args = vec![
             "log",
-            "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%D%x1f%s%x1e",
+            "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%D%x1f%s%x1f%G?%x1f%GS%x1f%GK%x1e",
             limit.as_str(),
         ];
         if let Some(r) = rev {
@@ -610,6 +704,318 @@ impl Git {
             args.extend(["--", p]);
         }
         Ok(parse::commits(&self.git(&args)?))
+    }
+
+    /// Read the 3 merge stages (`:1:path` base, `:2:path` ours, `:3:path` theirs)
+    /// plus the working-tree file for a conflicted path.
+    pub fn conflict_stages(&self, path: &str) -> Result<ConflictStages> {
+        let root = self.toplevel()?;
+        let root_s = root.to_string_lossy().into_owned();
+        let show = |stage: u8| -> Option<String> {
+            run_git(
+                &self.dir,
+                &["-C", &root_s, "show", &format!(":{stage}:{path}")],
+                &self.opts(LOCAL),
+            )
+            .ok()
+            .map(|o| o.stdout)
+        };
+        let worktree = std::fs::read(root.join(path))
+            .ok()
+            .map(|b| String::from_utf8_lossy(&b).into_owned());
+        Ok(ConflictStages {
+            base: show(1),
+            ours: show(2),
+            theirs: show(3),
+            worktree,
+        })
+    }
+
+    /// Write resolved content for `path` (relative to repo root) and stage it.
+    pub fn resolve_with_content(&self, path: &str, content: &str) -> Result<()> {
+        let root = self.toplevel()?;
+        let full = root.join(path);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| GitError::Io(e.to_string()))?;
+        }
+        std::fs::write(&full, content).map_err(|e| GitError::Io(e.to_string()))?;
+        let root_s = root.to_string_lossy().into_owned();
+        run_git(
+            &self.dir,
+            &["-C", &root_s, "add", "--", path],
+            &self.opts(LOCAL),
+        )
+        .map(|_| ())
+    }
+
+    /// List stashes in the repository.
+    pub fn stashes(&self) -> Result<Vec<StashEntry>> {
+        let out = self.git(&["stash", "list", "--format=%gd%x1f%gs%x1f%at%x1e"])?;
+        Ok(parse::stashes(&out))
+    }
+
+    /// Push working tree changes onto the stash stack.
+    pub fn stash_push(&self, message: Option<&str>, include_untracked: bool) -> Result<()> {
+        let mut args = vec!["stash", "push"];
+        if include_untracked {
+            args.push("-u");
+        }
+        if let Some(m) = message.map(str::trim).filter(|m| !m.is_empty()) {
+            args.extend(["-m", m]);
+        }
+        self.git(&args).map(|_| ())
+    }
+
+    /// Apply or pop `stash@{index}`.
+    pub fn stash_apply(&self, index: usize, pop: bool) -> Result<MergeOutcome> {
+        let before = self.rev("HEAD");
+        let stash_ref = format!("stash@{{{index}}}");
+        let sub = if pop { "pop" } else { "apply" };
+        let res = self.git(&["stash", sub, &stash_ref]);
+        match res {
+            Ok(_) => Ok(MergeOutcome::Merged),
+            Err(e) => self.outcome(before, Err(e), false),
+        }
+    }
+
+    /// Drop `stash@{index}`.
+    pub fn stash_drop(&self, index: usize) -> Result<()> {
+        let stash_ref = format!("stash@{{{index}}}");
+        self.git(&["stash", "drop", &stash_ref]).map(|_| ())
+    }
+
+    /// Cherry-pick a commit onto the current branch.
+    pub fn cherry_pick(&self, commit: &str) -> Result<MergeOutcome> {
+        let before = self.rev("HEAD");
+        let res = self.git(&["cherry-pick", "--no-edit", commit]);
+        self.outcome(before, res, false)
+    }
+
+    /// Create a new commit that reverts `commit`.
+    pub fn revert(&self, commit: &str) -> Result<MergeOutcome> {
+        let before = self.rev("HEAD");
+        let res = run_git(
+            &self.dir,
+            &["-c", "core.editor=true", "revert", "--no-edit", commit],
+            &self.opts(LOCAL),
+        )
+        .map(|o| o.stdout);
+        self.outcome(before, res, false)
+    }
+
+    /// List tags sorted newest-first.
+    pub fn tags(&self) -> Result<Vec<Tag>> {
+        let out = self.git(&[
+            "for-each-ref",
+            "--sort=-creatordate",
+            "--format=%(refname:short)%1f%(objectname)%1f%(objectname:short)%1f%(contents:subject)%1f%(creatordate:unix)%1f%(*objectname)%1f%(*objectname:short)%1e",
+            "refs/tags",
+        ])?;
+        Ok(parse::tags(&out))
+    }
+
+    /// Create a lightweight or annotated tag.
+    pub fn create_tag(
+        &self,
+        name: &str,
+        target: Option<&str>,
+        message: Option<&str>,
+    ) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(GitError::Invalid("tag name is empty".into()));
+        }
+        let mut args = vec!["tag"];
+        if let Some(msg) = message.map(str::trim).filter(|m| !m.is_empty()) {
+            args.extend(["-a", name, "-m", msg]);
+        } else {
+            args.push(name);
+        }
+        if let Some(t) = target.map(str::trim).filter(|t| !t.is_empty()) {
+            args.push(t);
+        }
+        self.git(&args).map(|_| ())
+    }
+
+    pub fn delete_tag(&self, name: &str) -> Result<()> {
+        self.git(&["tag", "-d", name]).map(|_| ())
+    }
+
+    pub fn push_tag(&self, name: &str, remote: Option<&str>) -> Result<()> {
+        let remote = match remote {
+            Some(r) => r.to_string(),
+            None => self.default_remote()?,
+        };
+        let refspec = format!("refs/tags/{name}");
+        self.git_net(&["push", &remote, &refspec]).map(|_| ())
+    }
+
+    /// Sparse-checkout status and patterns for this repository.
+    pub fn sparse_checkout_status(&self) -> Result<SparseCheckoutStatus> {
+        let get = |key: &str| {
+            run_git(
+                &self.dir,
+                &["config", "--get", key],
+                &self.opts(LOCAL).allow_exit(1),
+            )
+            .ok()
+            .map(|o| o.stdout.trim().to_lowercase())
+        };
+        let enabled = matches!(
+            get("core.sparsecheckout").as_deref(),
+            Some("true" | "1" | "yes")
+        );
+        let cone = !matches!(
+            get("core.sparsecheckoutcone").as_deref(),
+            Some("false" | "0" | "no")
+        );
+        let patterns = if enabled {
+            run_git(
+                &self.dir,
+                &["sparse-checkout", "list"],
+                &self.opts(LOCAL).allow_exit(1),
+            )
+            .ok()
+            .map(|o| {
+                o.stdout
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Ok(SparseCheckoutStatus {
+            enabled,
+            cone,
+            patterns,
+        })
+    }
+
+    /// Enable or update sparse-checkout paths.
+    pub fn sparse_checkout_set(&self, patterns: &[String], cone: bool) -> Result<()> {
+        let cleaned: Vec<String> = patterns
+            .iter()
+            .map(|p| p.trim().trim_matches('/').to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if cleaned.is_empty() {
+            return Err(GitError::Invalid(
+                "at least one sparse-checkout path is required".into(),
+            ));
+        }
+        let init_args = if cone {
+            vec!["sparse-checkout", "init", "--cone"]
+        } else {
+            vec!["sparse-checkout", "init", "--no-cone"]
+        };
+        self.git(&init_args)?;
+        let mut set_args: Vec<String> = vec!["sparse-checkout".into(), "set".into()];
+        set_args.extend(cleaned);
+        run_git(&self.dir, &as_strs(&set_args), &self.opts(LOCAL)).map(|_| ())
+    }
+
+    /// Disable sparse-checkout and restore the full working tree.
+    pub fn sparse_checkout_disable(&self) -> Result<()> {
+        self.git(&["sparse-checkout", "disable"]).map(|_| ())
+    }
+
+    /// Read commit signing settings for this repository.
+    pub fn signing_settings(&self) -> Result<SigningSettings> {
+        let get = |key: &str| {
+            run_git(
+                &self.dir,
+                &["config", "--get", key],
+                &self.opts(LOCAL).allow_exit(1),
+            )
+            .ok()
+            .map(|o| o.stdout.trim().to_string())
+            .filter(|s| !s.is_empty())
+        };
+        let enabled = matches!(
+            get("commit.gpgsign")
+                .as_deref()
+                .map(str::to_lowercase)
+                .as_deref(),
+            Some("true" | "1" | "yes")
+        );
+        let format = match get("gpg.format")
+            .as_deref()
+            .map(str::to_lowercase)
+            .as_deref()
+        {
+            Some("ssh") => SigningFormat::Ssh,
+            Some("x509") => SigningFormat::X509,
+            _ => SigningFormat::Gpg,
+        };
+        let signing_key = get("user.signingkey");
+        let program_key = match format {
+            SigningFormat::Ssh => "gpg.ssh.program",
+            SigningFormat::X509 => "gpg.x509.program",
+            SigningFormat::Gpg => "gpg.program",
+        };
+        let program = get(program_key);
+        Ok(SigningSettings {
+            enabled,
+            format,
+            signing_key,
+            program,
+        })
+    }
+
+    /// Update per-repository commit signing settings.
+    pub fn set_signing_settings(&self, settings: &SigningSettings) -> Result<()> {
+        self.git(&[
+            "config",
+            "--local",
+            "commit.gpgsign",
+            if settings.enabled { "true" } else { "false" },
+        ])?;
+        let fmt_str = match settings.format {
+            SigningFormat::Gpg => "openpgp",
+            SigningFormat::Ssh => "ssh",
+            SigningFormat::X509 => "x509",
+        };
+        self.git(&["config", "--local", "gpg.format", fmt_str])?;
+        if let Some(key) = settings
+            .signing_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            self.git(&["config", "--local", "user.signingkey", key])?;
+        } else {
+            let _ = run_git(
+                &self.dir,
+                &["config", "--local", "--unset", "user.signingkey"],
+                &self.opts(LOCAL).allow_exit(5),
+            );
+        }
+        let program_key = match settings.format {
+            SigningFormat::Ssh => "gpg.ssh.program",
+            SigningFormat::X509 => "gpg.x509.program",
+            SigningFormat::Gpg => "gpg.program",
+        };
+        if let Some(prog) = settings
+            .program
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            self.git(&["config", "--local", program_key, prog])?;
+        }
+        Ok(())
+    }
+
+    /// Changed files between two revisions (`from..to`).
+    pub fn changed_files_between(&self, from: &str, to: &str) -> Result<Vec<ChangedFile>> {
+        let range = format!("{from}..{to}");
+        let name_status = self.git(&["diff", "--name-status", "-z", "-M", &range])?;
+        let numstat = self.git(&["diff", "--numstat", "-z", "-M", &range])?;
+        Ok(parse::changed_files(&name_status, &numstat))
     }
 
     /// Number of distinct authors (by email) in the last `limit` commits.

@@ -91,7 +91,10 @@ Decisions:
 | Data | Where | Shared via git? |
 | --- | --- | --- |
 | Requests, collections, folders, environments (names and shared values), saved responses | workspace files | yes |
-| Values of environment variables marked **secret** | `.trax/state.json` | no |
+| Values of environment variables marked **secret** | OS keychain, with a `keychain://` pointer in `.trax/state.json`; in `.trax/state.json` itself when there is no keychain or it is turned off | no |
+| Vault references held by secret variables (`op://`, `vault://`, `azkv://`) | workspace files | yes |
+| Vault, GitHub and GitLab tokens | OS keychain (else `.trax/vault.json` / `.trax/pr_settings.json`) | no |
+| Review comments on requests | `.trax/review_comments.json`, and the PR itself on GitHub/GitLab | through the PR |
 | Environment "current values" set by scripts (`trax.env.set`) or edited locally | `.trax/state.json` | no |
 | Runtime variables (`trax.vars.set`) | `.trax/state.json` | no |
 | Cookies stored from responses | `.trax/cookies.json` | no |
@@ -172,6 +175,11 @@ All git operations shell out to the user's `git` executable (`crates/trax-git`).
 - **Never hang, never flash a window:** `GIT_TERMINAL_PROMPT=0` always; background calls also set `GCM_INTERACTIVE=never`; every call has a timeout; on Windows processes are spawned with `CREATE_NO_WINDOW`.
 - **Review** compares two refs like a pull request: commits (`base..head`), changed files with line counts, the diff (`base...head`), and a dry-run conflict check with `git merge-tree --write-tree`. The UI labels files as requests, environments, collections or saved responses. "Open pull request" builds the compare URL for GitHub (also GHE, Gitea, Forgejo), GitLab, Bitbucket and Azure DevOps.
 - **Merging and conflicts.** Pull supports merge, rebase and fast-forward-only. Merge outcomes are reported as up-to-date, fast-forward, merged, rebased or conflicts; conflicted files can be resolved with "keep mine", "take theirs" or "mark resolved", then the merge/rebase is continued or aborted.
+- **Semantic merge** (`trax-core/src/merge.rs`). Git's line merge sees two people adding different headers to the same request as a conflict. For a conflicted request, environment, collection, folder or `trax.yaml`, the three index stages (`:1:`, `:2:`, `:3:`) are parsed into the model and merged per field: scalars (name, method, URL, auth, settings), keyed lists (headers, params, variables, form fields) by key, JSON bodies key by key (nested objects too), and scripts as text, where two sides that each appended a test are combined. Only fields both sides changed differently become `FieldConflict`s; each has a stable id (`headers.Authorization`), and the user's pick per id (mine, theirs, original) produces the merged YAML, which is written and staged. Files that don't parse fall back to the line-level choices.
+- **Stash, cherry-pick, revert, tags.** Thin wrappers over the CLI; cherry-pick and revert report conflicts like a merge, so the same editor resolves them. Tags can be annotated, pushed and deleted.
+- **Sparse checkout** for monorepos: `clone --filter=blob:none --sparse` then `sparse-checkout set` (cone mode by default), on clone, from an onboarding link, or later in Settings.
+- **Commit signing.** `log` reads `%G?`, `%GS` and `%GK`, so history shows Verified / unverified per commit. Signing settings (`commit.gpgsign`, `gpg.format` gpg/ssh/x509, `user.signingkey`, the program) are written to the repository's own config, so each team's repository can sign differently.
+- **Pull requests** (`trax-core/src/pr.rs`) go straight to the GitHub REST and GitLab v4 APIs with the token from Settings (kept in the OS keychain), `GITHUB_TOKEN`/`GITLAB_TOKEN`, or `gh auth token`. The host comes from `origin` (GitHub Enterprise and self-hosted GitLab via an API URL override). Review comments carry the request field they're about; on GitHub they are anchored to the line of that field at the PR's head commit, and become a conversation comment tagged with the field when the line isn't in the diff. A comment meant for a PR that can't be posted is an error, never silently kept local.
 - **Multiple teams.** Each team's collections are a workspace backed by that team's repository; a developer registers as many as they need and switches between them (grouped by team in the switcher). Git identity can be set per repository, which matters when the same person commits to different organisations.
 
 ## Background sync ("always online")
@@ -183,7 +191,8 @@ A pass:
 1. Fetches the remote with prompts disabled. Failures are classified as offline, auth-required or error, and the UI shows them; nothing else happens.
 2. Computes ahead/behind and local changes.
 3. Fast-forwards the current branch **only if** it is behind, has no local commits, has no uncommitted changes to tracked files, and no merge or rebase is in progress. It never merges, rebases or touches local edits.
-4. Emits `sync-status`, and `workspace-changed` when commits arrived. The UI reloads the tree and refreshes open tabs.
+4. Summarises incoming commits: their authors and the requests, environments and collections they touch (`changedRequests`).
+5. Emits `sync-status`, and `workspace-changed` when commits arrived. The UI reloads the tree, refreshes open tabs and shows who changed what ("Grace changed Create order, Refund order"), both when commits are waiting and when they were pulled.
 
 Passes for the same workspace never overlap. A file watcher (`notify`) on every workspace and on the registry covers the other sources of change: an MCP agent adding requests, the user editing YAML by hand, a `git checkout` in a terminal. Events are debounced.
 
@@ -193,7 +202,7 @@ If a file changes on disk while its tab has unsaved edits, the tab is not overwr
 
 `trax-mcp` speaks MCP over stdio (newline-delimited JSON-RPC 2.0) and negotiates protocol versions `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05`. It is implemented directly rather than with an SDK because the surface is small (initialize, ping, tools/list, tools/call) and the SDKs' APIs were still moving quickly.
 
-Tools: `list_workspaces`, `init_workspace`, `get_workspace`, `get_request`, `upsert_collection`, `upsert_request`, `delete_request`, `run_request`, `run_collection`, `send_http_request`, `list_environments`, `upsert_environment`, `list_saved_responses`, `list_cookies`, `clear_cookies`. Auth objects accept every type the app has, OAuth 2.0 included.
+Tools: `list_workspaces`, `init_workspace`, `get_workspace`, `get_request`, `upsert_collection`, `upsert_request`, `delete_request`, `move_item`, `import_spec`, `run_request`, `run_collection`, `send_http_request`, `list_environments`, `upsert_environment`, `list_saved_responses`, `list_cookies`, `clear_cookies`, `list_history`, `restore_history_entry`, `list_workspace_templates`, `create_onboarding_link`, `list_pull_requests`, `create_pull_request`, `approve_pull_request`, `merge_pull_request`, `list_review_comments`, `add_review_comment`, `resolve_review_comment`, `semantic_merge_file`. Auth objects accept every type the app has, OAuth 2.0 included.
 
 Decisions:
 
@@ -234,7 +243,9 @@ The interface follows the "Courion" design (dark first, quiet chrome, one indigo
 
 - Scripts have no I/O. They can only shape the request and read the response.
 - AI agents get only what the user allows (see MCP server). Secret values are masked in their output unless the user turns that on, and they never run requests against a protected environment.
-- Secret variables, OAuth 2.0 tokens and cookies never reach the shared files. They are stored under `.trax/`, which `init` adds to `.gitignore`. OS-keychain storage is on the roadmap.
+- Secret variables, OAuth 2.0 tokens and cookies never reach the shared files. Secret values go to the OS keychain (Credential Manager and the macOS Keychain through `keyring`; on Linux libsecret's `secret-tool`, with the value on stdin so it never appears in a process list); without a keychain they fall back to `.trax/`, which `init` adds to `.gitignore`. There is no plaintext mirror of keychain entries.
+- Vault references are resolved only when a request is sent, cached in memory for two minutes, and an unreachable vault stops the run rather than sending the reference as a value. Vault CLIs (`op`, `vault`, `az`) run without a console window.
+- Onboarding links carry names, the repository, non-secret variables and vault references from a shared environment only. Secret values are never put in a link; the newcomer types them and they go to their keychain.
 - The OAuth 2.0 loopback listener binds to 127.0.0.1 only, lives for one sign-in (at most five minutes), and accepts a code only with the `state` it sent.
 - TLS verification is on by default and can be disabled per request only.
 - The webview CSP is currently disabled (`"csp": null`) while the static export's inline bootstrap scripts are verified against Tauri's CSP hash injection. HTML responses are previewed inside an iframe with an empty `sandbox` (no scripts, no same-origin access, no navigation of the app) and a CSP that blocks every outside request; images are shown from `data:` URLs. Tightening the CSP is on the roadmap.

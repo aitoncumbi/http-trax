@@ -23,6 +23,11 @@ tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 
+# OS keychain on Windows (Credential Manager) and macOS (Keychain). Linux goes
+# through libsecret's `secret-tool`, so the headless build needs no D-Bus.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 wiremock = "0.6"

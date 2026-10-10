@@ -348,3 +348,216 @@ pub async fn git_file_changes(
     })
     .await
 }
+
+// ------------------------------------------------ Phase 2: semantic merge
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictPreview {
+    pub stages: ConflictStages,
+    pub semantic: Option<trax_core::SemanticMergePreview>,
+}
+
+#[tauri::command]
+pub async fn git_conflict_preview(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+    choices: Option<std::collections::BTreeMap<String, trax_core::MergeSide>>,
+) -> CmdResult<ConflictPreview> {
+    blocking(&state, &workspace_id, move |g| {
+        let stages = g.conflict_stages(&path)?;
+        let choice_map = choices.unwrap_or_default();
+        let semantic = trax_core::semantic_merge(
+            &path,
+            stages.base.as_deref(),
+            stages.ours.as_deref(),
+            stages.theirs.as_deref(),
+            &choice_map,
+        );
+        Ok(ConflictPreview { stages, semantic })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_resolve_semantic(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+    choices: std::collections::BTreeMap<String, trax_core::MergeSide>,
+    manual_content: Option<String>,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        if let Some(content) = manual_content {
+            return g.resolve_with_content(&path, &content);
+        }
+        let stages = g.conflict_stages(&path)?;
+        let preview = trax_core::semantic_merge(
+            &path,
+            stages.base.as_deref(),
+            stages.ours.as_deref(),
+            stages.theirs.as_deref(),
+            &choices,
+        )
+        .ok_or_else(|| GitError::Command {
+            command: format!("semantic_merge {path}"),
+            code: None,
+            message: "file cannot be merged semantically".into(),
+        })?;
+        g.resolve_with_content(&path, &preview.merged_yaml)
+    })
+    .await
+}
+
+// --------------------------------------- Phase 2: stash / cherry-pick / tags
+
+#[tauri::command]
+pub async fn git_stashes(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Vec<StashEntry>> {
+    blocking(&state, &workspace_id, |g| g.stashes()).await
+}
+
+#[tauri::command]
+pub async fn git_stash_push(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    message: Option<String>,
+    include_untracked: bool,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        g.stash_push(message.as_deref(), include_untracked)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    index: usize,
+    pop: bool,
+) -> CmdResult<MergeOutcome> {
+    blocking(&state, &workspace_id, move |g| g.stash_apply(index, pop)).await
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    index: usize,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| g.stash_drop(index)).await
+}
+
+#[tauri::command]
+pub async fn git_cherry_pick(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    commit: String,
+) -> CmdResult<MergeOutcome> {
+    blocking(&state, &workspace_id, move |g| g.cherry_pick(&commit)).await
+}
+
+#[tauri::command]
+pub async fn git_revert(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    commit: String,
+) -> CmdResult<MergeOutcome> {
+    blocking(&state, &workspace_id, move |g| g.revert(&commit)).await
+}
+
+#[tauri::command]
+pub async fn git_tags(state: State<'_, AppState>, workspace_id: String) -> CmdResult<Vec<Tag>> {
+    blocking(&state, &workspace_id, |g| g.tags()).await
+}
+
+#[tauri::command]
+pub async fn git_create_tag(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    name: String,
+    target: Option<String>,
+    message: Option<String>,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        g.create_tag(&name, target.as_deref(), message.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_delete_tag(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    name: String,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| g.delete_tag(&name)).await
+}
+
+#[tauri::command]
+pub async fn git_push_tag(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    remote: Option<String>,
+    name: String,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        g.push_tag(&name, remote.as_deref())
+    })
+    .await
+}
+
+// ------------------------------------ Phase 2: sparse checkout & signing
+
+#[tauri::command]
+pub async fn git_sparse_checkout_status(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<SparseCheckoutStatus> {
+    blocking(&state, &workspace_id, |g| g.sparse_checkout_status()).await
+}
+
+#[tauri::command]
+pub async fn git_sparse_checkout_set(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    patterns: Vec<String>,
+    cone: bool,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        g.sparse_checkout_set(&patterns, cone)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_sparse_checkout_disable(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, |g| g.sparse_checkout_disable()).await
+}
+
+#[tauri::command]
+pub async fn git_signing_settings(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<SigningSettings> {
+    blocking(&state, &workspace_id, |g| g.signing_settings()).await
+}
+
+#[tauri::command]
+pub async fn git_set_signing_settings(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    settings: SigningSettings,
+) -> CmdResult<()> {
+    blocking(&state, &workspace_id, move |g| {
+        g.set_signing_settings(&settings)
+    })
+    .await
+}

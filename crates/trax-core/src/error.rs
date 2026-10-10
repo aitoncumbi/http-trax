@@ -20,6 +20,8 @@ pub enum Error {
     NotFound(String),
     #[error("{0}")]
     Invalid(String),
+    #[error("http error: {0}")]
+    Http(String),
     #[error("script engine: {0}")]
     Script(String),
 }

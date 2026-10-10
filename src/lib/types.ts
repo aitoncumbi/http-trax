@@ -397,6 +397,9 @@ export interface Branch {
   lastCommitDate?: number | null;
 }
 
+/** `git log %G?` verdict; absent when the commit is unsigned. */
+export type SignatureStatus = "good" | "untrusted" | "bad" | "expired" | "revoked" | "cannot-check";
+
 export interface Commit {
   hash: string;
   shortHash: string;
@@ -406,6 +409,9 @@ export interface Commit {
   subject: string;
   parents: string[];
   refs: string[];
+  signatureStatus?: SignatureStatus;
+  signer?: string;
+  signingKey?: string;
 }
 
 export interface Remote {
@@ -471,6 +477,9 @@ export interface SyncReport {
   behind: number;
   changes: number;
   pulled: number;
+  changedFiles?: string[];
+  changedRequests?: string[];
+  authors?: string[];
   fetchedAt?: string | null;
   checkedAt: string;
   message?: string | null;
@@ -599,4 +608,196 @@ export interface ExportRequest {
   body: ExportBody;
   basicAuth?: { username: string; password: string } | null;
   warnings: string[];
+}
+
+// ------------------------------------------ Phase 2: git & semantic merge
+
+export interface StashEntry {
+  index: number;
+  reference: string;
+  message: string;
+  date: number;
+}
+
+export interface Tag {
+  name: string;
+  hash: string;
+  shortHash: string;
+  /** Annotation message; absent for lightweight tags. */
+  message?: string | null;
+  date?: number | null;
+}
+
+export type SigningFormat = "gpg" | "ssh" | "x509";
+
+export interface SigningSettings {
+  enabled: boolean;
+  format: SigningFormat;
+  signingKey?: string | null;
+  program?: string | null;
+}
+
+export interface SparseCheckoutStatus {
+  enabled: boolean;
+  cone: boolean;
+  patterns: string[];
+}
+
+export interface ConflictStages {
+  base?: string | null;
+  ours?: string | null;
+  theirs?: string | null;
+  worktree?: string | null;
+}
+
+export type MergeSide = "base" | "ours" | "theirs";
+
+export interface FieldConflict {
+  /** Stable id used as the key in the `choices` map. */
+  id: string;
+  section: string;
+  field: string;
+  label: string;
+  base?: string | null;
+  ours?: string | null;
+  theirs?: string | null;
+  chosen: MergeSide;
+}
+
+export interface SemanticMergePreview {
+  path: string;
+  kind: FileKind;
+  canAutoMerge: boolean;
+  autoMerged: string[];
+  conflicts: FieldConflict[];
+  mergedYaml: string;
+}
+
+export interface ConflictPreview {
+  stages: ConflictStages;
+  semantic?: SemanticMergePreview | null;
+}
+
+// ------------------------------------- Phase 2: templates & onboarding
+
+export interface WorkspaceTemplate {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  environments: string[];
+  requestCount: number;
+}
+
+export interface OnboardingSpec {
+  name: string;
+  repoUrl?: string;
+  branch?: string;
+  defaultEnv?: string;
+  templateId?: string;
+  sparsePatterns?: string[];
+  /** Secret variable names the newcomer is asked for. */
+  requiredSecrets?: string[];
+  envVars?: Record<string, string>;
+}
+
+// ----------------------------------------- Phase 2: vault & keychain
+
+export interface VaultSettings {
+  useOsKeychain: boolean;
+  hashicorpAddr?: string;
+  hashicorpNamespace?: string;
+  hashicorpToken?: string;
+  onepasswordConnectUrl?: string;
+  onepasswordToken?: string;
+  azureVaultName?: string;
+  azureToken?: string;
+}
+
+export interface VaultProviderStatus {
+  id: string;
+  name: string;
+  scheme: string;
+  available: boolean;
+  detail: string;
+}
+
+// ------------------------------ Phase 2: pull requests & inline reviews
+
+export type HostingProvider = "github" | "gitlab";
+
+export interface PrSettings {
+  providerOverride?: HostingProvider;
+  apiBaseUrl?: string;
+  githubToken?: string;
+  gitlabToken?: string;
+}
+
+export interface HostingRepo {
+  provider: HostingProvider;
+  host: string;
+  apiBase: string;
+  webBase: string;
+  owner: string;
+  repo: string;
+  fullPath: string;
+}
+
+export interface PrContext {
+  settings: PrSettings;
+  /** Detected from the `origin` remote; null when it isn't GitHub or GitLab. */
+  hosting?: HostingRepo | null;
+}
+
+export type PrState = "open" | "merged" | "closed";
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  body: string;
+  state: PrState;
+  draft: boolean;
+  author: string;
+  sourceBranch: string;
+  targetBranch: string;
+  webUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  approved: boolean;
+  commentCount: number;
+  provider: HostingProvider;
+}
+
+export interface CreatePullRequestInput {
+  title: string;
+  body: string;
+  sourceBranch: string;
+  targetBranch: string;
+  draft: boolean;
+}
+
+export interface ReviewComment {
+  id: string;
+  prNumber?: number;
+  requestId?: string;
+  requestName?: string;
+  path: string;
+  /** Request field the comment is about: `url`, `headers.Authorization`, `scripts.postResponse`, `general`… */
+  field: string;
+  line: number;
+  body: string;
+  author: string;
+  createdAt: string;
+  resolved: boolean;
+  /** `local`, `github` or `gitlab`. */
+  source: string;
+}
+
+export interface AddReviewCommentInput {
+  prNumber?: number | null;
+  requestId?: string | null;
+  path?: string | null;
+  field?: string | null;
+  line?: number | null;
+  body: string;
 }

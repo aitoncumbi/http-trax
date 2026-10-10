@@ -15,6 +15,7 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        trax_core::vault::use_in_memory_keychain();
         let home = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
         let server = Server::new(Config {
@@ -532,4 +533,94 @@ paths:
     let (ws_text, ws_data, _) = h.tool("get_workspace", json!({})).await;
     assert!(ws_text.contains("List pets"), "{ws_text}");
     assert_eq!(ws_data["collections"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn agent_uses_templates_prs_and_review_comments() {
+    let h = Harness::new();
+    let (_, tpl_data, err) = h.tool("list_workspace_templates", json!({})).await;
+    assert!(!err);
+    assert!(tpl_data["templates"].as_array().unwrap().len() >= 5);
+
+    let ws_dir = h.repo.path().join("templated-ws");
+    let (_, init_data, err) = h
+        .tool(
+            "init_workspace",
+            json!({
+                "path": ws_dir.to_string_lossy(),
+                "name": "Users Service",
+                "template": "rest-crud"
+            }),
+        )
+        .await;
+    assert!(!err);
+    assert_eq!(init_data["workspace"]["name"], "Users Service");
+
+    let (_, link_data, err) = h
+        .tool(
+            "create_onboarding_link",
+            json!({ "repo_url": "git@github.com:acme/users.git", "branch": "main" }),
+        )
+        .await;
+    assert!(!err);
+    assert!(link_data["link"]
+        .as_str()
+        .unwrap()
+        .starts_with("courion://onboard?"));
+
+    let (_, pr_data, err) = h
+        .tool(
+            "create_pull_request",
+            json!({
+                "title": "Add idempotency header to Create user",
+                "body": "Prevents duplicate user creation on retry",
+                "source_branch": "feat/idempotency",
+                "target_branch": "main"
+            }),
+        )
+        .await;
+    assert!(!err);
+    assert_eq!(pr_data["number"], 1);
+
+    let (_, comment_data, err) = h
+        .tool(
+            "add_review_comment",
+            json!({
+                "request": "Create user",
+                "field": "headers.Idempotency-Key",
+                "body": "Confirmed UUID v4 format matches gateway spec.",
+                "pr_number": 1
+            }),
+        )
+        .await;
+    assert!(!err);
+    assert_eq!(comment_data["field"], "headers.Idempotency-Key");
+    let cid = comment_data["id"].as_str().unwrap().to_string();
+
+    let (_, list_comments, err) = h
+        .tool("list_review_comments", json!({ "pr_number": 1 }))
+        .await;
+    assert!(!err);
+    assert_eq!(list_comments["comments"].as_array().unwrap().len(), 1);
+
+    let (_, resolved_comment, err) = h
+        .tool(
+            "resolve_review_comment",
+            json!({ "comment_id": cid, "resolved": true }),
+        )
+        .await;
+    assert!(!err);
+    assert_eq!(resolved_comment["resolved"], true);
+
+    let (_, approved, err) = h
+        .tool("approve_pull_request", json!({ "pr_number": 1 }))
+        .await;
+    assert!(!err);
+    assert_eq!(approved["approved"], true);
+
+    let (_, merged, err) = h
+        .tool("merge_pull_request", json!({ "pr_number": 1 }))
+        .await;
+    assert!(!err);
+    assert_eq!(merged["state"], "merged");
 }

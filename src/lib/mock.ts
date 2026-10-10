@@ -7,8 +7,10 @@ import type {
   AgentPermissions,
   Branch,
   Commit,
+  ConflictPreview,
   CookieInfo,
   CookieKey,
+  CreatePullRequestInput,
   Environment,
   EnvironmentView,
   ExportRequest,
@@ -18,14 +20,29 @@ import type {
   FileChanges,
   GroupNode,
   HistoryEntry,
+  MergeOutcome,
+  MergeSide,
+  OnboardingSpec,
+  PrContext,
+  PrSettings,
+  PullRequest,
   RepoStatus,
   Request,
+  AddReviewCommentInput,
+  ReviewComment,
   RunResult,
   SavedResponse,
+  SigningSettings,
+  SparseCheckoutStatus,
+  StashEntry,
   SyncReport,
+  Tag,
   TreeItem,
+  VaultProviderStatus,
+  VaultSettings,
   WorkspaceEntry,
   WorkspaceManifest,
+  WorkspaceTemplate,
 } from "./types";
 
 type MockItem = { kind: "folder"; group: MockGroup } | { kind: "request"; request: Request };
@@ -473,8 +490,11 @@ function safeJson(s: string): unknown {
 
 const now = () => Math.floor(Date.now() / 1000);
 
+const CONFLICT_PATH = "api-tests/collections/orders-api/orders/create-order.req.yaml";
+
 const gitState = {
   branch: "feature/refunds",
+  merging: false,
   files: [
     { path: "api-tests/environments/local.env.yaml", index: "M", worktree: ".", staged: true, unstaged: false, untracked: false, conflicted: false, inWorkspace: true },
     { path: "api-tests/collections/orders-api/orders/create-order.req.yaml", index: ".", worktree: "M", staged: false, unstaged: true, untracked: false, conflicted: false, inWorkspace: true },
@@ -545,6 +565,7 @@ index 3b18e51..a9c4f2d 100644
 `;
 
 const listeners = new Map<string, Set<(p: unknown) => void>>();
+let teammatePushed = false;
 
 export function mockListen(name: string, handler: (p: unknown) => void): () => void {
   if (!listeners.has(name)) listeners.set(name, new Set());
@@ -733,11 +754,54 @@ const handlers: Record<string, (a: Args) => unknown> = {
   },
   create_workspace: (a) => {
     const id = uid();
+    const tpl = (a.template as string | null) ?? null;
+    const collections: MockGroup[] = [];
+    const environments: EnvironmentView[] = [];
+    if (tpl && tpl !== "blank") {
+      environments.push({
+        id: uid(),
+        name: "Local",
+        variables: [{ key: "baseUrl", value: "http://localhost:8080", enabled: true }],
+        overrides: {},
+        shared: true,
+      });
+      if (tpl === "rest-crud") {
+        collections.push(
+          group("Items API", [
+            r(req("List items", "GET", "{{baseUrl}}/v1/items")),
+            r(req("Create item", "POST", "{{baseUrl}}/v1/items")),
+            r(req("Get item", "GET", "{{baseUrl}}/v1/items/{{itemId}}")),
+            r(req("Delete item", "DELETE", "{{baseUrl}}/v1/items/{{itemId}}")),
+          ], { seq: 1 }),
+        );
+      } else if (tpl === "graphql-service") {
+        collections.push(
+          group("GraphQL API", [
+            r(req("Viewer profile", "POST", "{{baseUrl}}/graphql", { body: { mode: "graphql", query: "query Viewer { viewer { id name } }", variables: "{}" } })),
+          ], { seq: 1 }),
+        );
+      } else if (tpl === "oauth2-microservice") {
+        collections.push(
+          group("Service API", [r(req("Health check", "GET", "{{baseUrl}}/health"))], { seq: 1 }),
+        );
+      } else if (tpl === "webhook-suite") {
+        collections.push(
+          group("Webhooks", [r(req("Deliver event", "POST", "{{baseUrl}}/webhooks/events"))], { seq: 1 }),
+        );
+      }
+    }
     const w: MockWorkspace = {
-      entry: { id, name: s(a, "name"), path: s(a, "path"), team: (a.team as string) || null, sync: { enabled: true, intervalSecs: 60, autoPull: true, remote: "origin" }, prefs: { bookmarks: [] } },
+      entry: {
+        id,
+        name: s(a, "name"),
+        path: s(a, "path"),
+        team: (a.team as string) || null,
+        sync: { enabled: true, intervalSecs: 60, autoPull: true, remote: "origin" },
+        prefs: { bookmarks: [], activeEnvironment: environments[0]?.id ?? null },
+      },
       manifest: { version: 1, id, name: s(a, "name"), team: (a.team as string) || undefined },
-      collections: [],
-      environments: [],
+      collections,
+      environments,
       saved: {},
       runtime: {},
       history: [],
@@ -1122,9 +1186,9 @@ const handlers: Record<string, (a: Args) => unknown> = {
       ahead: primary ? 1 : 0,
       behind: 0,
       files: primary ? structuredClone(gitState.files).map((x) => ({ ...x, origPath: null })) : [],
-      merging: false,
+      merging: primary && gitState.merging,
       rebasing: false,
-      conflicts: 0,
+      conflicts: primary ? gitState.files.filter((f) => f.conflicted).length : 0,
       hasRemote: true,
     };
   },
@@ -1157,7 +1221,17 @@ const handlers: Record<string, (a: Args) => unknown> = {
   git_commit: (a): Commit => {
     gitState.files = gitState.files.filter((x) => !x.staged);
     gitState.commits.unshift({ subject: s(a, "message"), author: "You", ago: 0 });
-    return { hash: uid(), shortHash: uid().slice(0, 7), authorName: "You", authorEmail: "you@example.com", date: now(), subject: s(a, "message"), parents: [], refs: [] };
+    return {
+      hash: uid(),
+      shortHash: uid().slice(0, 7),
+      authorName: "You",
+      authorEmail: "you@example.com",
+      date: now(),
+      subject: s(a, "message"),
+      parents: [],
+      refs: [],
+      ...(mockSigning.enabled ? { signatureStatus: "good" as const, signer: "Ada Lovelace <ada@payments.example.com>" } : {}),
+    };
   },
   git_fetch: () => delay(400),
   git_pull: async () => {
@@ -1178,13 +1252,35 @@ const handlers: Record<string, (a: Args) => unknown> = {
   git_create_branch: (a) => void (a.checkout && (gitState.branch = s(a, "name"))),
   git_checkout: (a) => void (gitState.branch = s(a, "name").replace(/^origin\//, "")),
   git_delete_branch: () => undefined,
-  git_merge: async () => {
+  git_merge: async (a) => {
     await delay(300);
-    return { kind: "merged" };
+    // Merging main brings in a teammate's edit to the same header.
+    if (a.branch !== "main") return { kind: "merged" };
+    gitState.merging = true;
+    gitState.files = gitState.files.filter((f) => f.path !== CONFLICT_PATH);
+    gitState.files.unshift({ path: CONFLICT_PATH, index: "U", worktree: "U", staged: false, unstaged: true, untracked: false, conflicted: true, inWorkspace: true });
+    return { kind: "conflicts", files: [CONFLICT_PATH] };
   },
-  git_abort: () => undefined,
-  git_continue: () => undefined,
-  git_resolve: () => undefined,
+  git_abort: () => {
+    gitState.merging = false;
+    gitState.files = gitState.files.filter((f) => !f.conflicted);
+  },
+  git_continue: () => {
+    gitState.merging = false;
+    gitState.commits.unshift({ subject: "Merge 'main' into feature/refunds", author: "Ada Lovelace", ago: 0, merge: true });
+  },
+  git_resolve: (a) => {
+    const p = s(a, "path");
+    gitState.files.forEach((f) => {
+      if (f.path === p) {
+        f.conflicted = false;
+        f.staged = true;
+        f.unstaged = false;
+        f.index = "M";
+        f.worktree = ".";
+      }
+    });
+  },
   git_log: (): Commit[] =>
     gitState.commits.map((c, i) => ({
       hash: `${i}`.padStart(40, "a"),
@@ -1195,6 +1291,11 @@ const handlers: Record<string, (a: Args) => unknown> = {
       subject: c.subject,
       parents: "merge" in c ? ["p1", "p2"] : ["p1"],
       refs: i === 0 ? [`HEAD -> ${gitState.branch}`] : i === 2 ? ["origin/main", "main"] : [],
+      ...(i === 1 || i === 2
+        ? { signatureStatus: "good" as const, signer: `${c.author} <${c.author.split(" ")[0].toLowerCase()}@payments.example.com>` }
+        : i === 4
+          ? { signatureStatus: "untrusted" as const, signer: c.author }
+          : {}),
     })),
   git_diff: () => SAMPLE_DIFF,
   git_show: () => SAMPLE_DIFF,
@@ -1206,7 +1307,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     behind: 0,
     commits: (handlers.git_log({}) as Commit[]).slice(0, 2),
     files: [
-      { path: "api-tests/collections/orders-api/create-order.req.yaml", status: "M", additions: 4, deletions: 1 },
+      { path: "api-tests/collections/orders-api/orders/create-order.req.yaml", status: "M", additions: 4, deletions: 1 },
       { path: "api-tests/collections/orders-api/admin/refund-order.req.yaml", status: "A", additions: 12, deletions: 0 },
     ],
     diff: SAMPLE_DIFF,
@@ -1221,7 +1322,13 @@ const handlers: Record<string, (a: Args) => unknown> = {
   git_set_identity: () => undefined,
   sync_now: async (a) => {
     await delay(500);
-    const report = syncReport(ws(a.workspaceId));
+    const w = ws(a.workspaceId);
+    // The first manual sync of the demo workspace finds teammate commits.
+    const report: SyncReport =
+      w === db.workspaces[0] && !teammatePushed
+        ? { ...syncReport(w), state: "diverged", behind: 2, changedRequests: ["Create order", "Refund order"], authors: ["Grace Hopper"] }
+        : syncReport(w);
+    if (w === db.workspaces[0]) teammatePushed = true;
     listeners.get("sync-status")?.forEach((h) => h({ workspaceId: a.workspaceId, report }));
     return report;
   },
@@ -1298,7 +1405,288 @@ const handlers: Record<string, (a: Args) => unknown> = {
     return { path, diff: SAMPLE_DIFF, ...(known ?? { kind: "other", additions: 0, deletions: 0, changes: null }) };
   },
   sync_statuses: () => Object.fromEntries(db.workspaces.map((w) => [w.entry.id, syncReport(w)])),
+
+  // Phase 2: templates & onboarding
+  list_workspace_templates: (): WorkspaceTemplate[] => structuredClone(MOCK_TEMPLATES),
+  create_onboarding_link: (a): string => {
+    const w = ws(a.workspaceId);
+    const params = new URLSearchParams({ name: w.manifest.name });
+    params.set("repo", (a.repoUrl as string | null) || "git@github.com:acme/payments-service.git");
+    params.set("branch", (a.branch as string | null) || "main");
+    const env = w.environments.find((e) => e.id === w.entry.prefs.activeEnvironment) ?? w.environments[0];
+    if (env) {
+      params.set("env", env.name);
+      const secrets = env.variables.filter((v) => v.secret).map((v) => v.key);
+      if (secrets.length) params.set("secrets", secrets.join(","));
+    }
+    return `courion://onboard?${params.toString()}`;
+  },
+  parse_onboarding_link: (a): OnboardingSpec => {
+    const raw = s(a, "link").trim();
+    const q = raw.indexOf("?");
+    if (!raw.startsWith("courion://onboard") || q < 0) throw new Error("Not a Courion onboarding link (courion://onboard?…)");
+    const p = new URLSearchParams(raw.slice(q + 1));
+    const list = (k: string) => (p.get(k) ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    return {
+      name: p.get("name") || "Team workspace",
+      repoUrl: p.get("repo") ?? undefined,
+      branch: p.get("branch") ?? undefined,
+      defaultEnv: p.get("env") ?? undefined,
+      templateId: p.get("template") ?? undefined,
+      sparsePatterns: list("sparse"),
+      requiredSecrets: list("secrets"),
+    };
+  },
+  onboard_workspace: (a): WorkspaceEntry => {
+    const spec = handlers.parse_onboarding_link({ link: a.link }) as OnboardingSpec;
+    const entry = handlers.create_workspace({ path: a.path, name: spec.name, team: null, initGit: false, template: spec.templateId ?? "rest-crud" }) as WorkspaceEntry;
+    const w = ws(entry.id);
+    const env = w.environments[0];
+    if (env) {
+      if (spec.defaultEnv) env.name = spec.defaultEnv;
+      const secrets = (a.secrets as Record<string, string> | null) ?? {};
+      for (const key of spec.requiredSecrets ?? []) env.variables.push({ key, value: secrets[key] ?? "", enabled: true, secret: true });
+    }
+    return structuredClone(w.entry);
+  },
+
+  // Phase 2: vault & keychain
+  get_vault_settings: (): VaultSettings => structuredClone(mockVault),
+  save_vault_settings: (a) => void (mockVault = structuredClone(a.settings as VaultSettings)),
+  vault_providers_status: (): VaultProviderStatus[] => [
+    { id: "os-keychain", name: "OS keychain", scheme: "keychain://", available: true, detail: mockVault.useOsKeychain ? "Environment secrets are stored in the OS keychain" : "Off: secrets stay in .trax/state.json" },
+    { id: "1password", name: "1Password", scheme: "op://vault/item/field", available: true, detail: mockVault.onepasswordConnectUrl ? "Configured via 1Password Connect API" : "1Password CLI (`op`) detected" },
+    { id: "hashicorp-vault", name: "HashiCorp Vault", scheme: "vault://mount/path#field", available: !!mockVault.hashicorpAddr, detail: mockVault.hashicorpAddr ? `Configured (${mockVault.hashicorpAddr})` : "Set HashiCorp Vault URL & token below or VAULT_ADDR" },
+    { id: "azure-keyvault", name: "Azure Key Vault", scheme: "azkv://vault-name/secret-name", available: false, detail: "Set Azure Key Vault token below or sign in with `az login`" },
+  ],
+  resolve_secret_reference: (a): string => {
+    const v = s(a, "value").trim();
+    if (!/^(op|vault|azkv|keychain):\/\//.test(v)) return v;
+    if (v.startsWith("azkv://")) throw new Error("Azure Key Vault token not set and `az` CLI failed");
+    return `demo-${v.split(/[/#]/).pop()}`;
+  },
+
+  // Phase 2: pull requests & inline review comments
+  get_pr_settings: (): PrContext => ({
+    settings: structuredClone(mockPrSettings),
+    hosting: { provider: "github", host: "github.com", apiBase: "https://api.github.com", webBase: "https://github.com", owner: "acme", repo: "payments-service", fullPath: "acme/payments-service" },
+  }),
+  save_pr_settings: (a) => void (mockPrSettings = structuredClone(a.settings as PrSettings)),
+  list_pull_requests: (a): PullRequest[] => {
+    const filter = (a.stateFilter as string | null) || "open";
+    return structuredClone(filter === "all" ? mockPulls : mockPulls.filter((p) => p.state === filter));
+  },
+  create_pull_request: (a): PullRequest => {
+    const input = a.input as CreatePullRequestInput;
+    if (mockPulls.some((p) => p.state === "open" && p.sourceBranch === input.sourceBranch && p.targetBranch === input.targetBranch)) {
+      throw new Error(`A pull request for ${input.sourceBranch} already exists`);
+    }
+    const number = Math.max(40, ...mockPulls.map((p) => p.number)) + 1;
+    const at = new Date().toISOString();
+    const pr: PullRequest = {
+      number,
+      title: input.title,
+      body: input.body,
+      state: "open",
+      draft: input.draft,
+      author: "ada",
+      sourceBranch: input.sourceBranch,
+      targetBranch: input.targetBranch,
+      webUrl: `https://github.com/acme/payments-service/pull/${number}`,
+      createdAt: at,
+      updatedAt: at,
+      approved: false,
+      commentCount: 0,
+      provider: "github",
+    };
+    mockPulls.unshift(pr);
+    return structuredClone(pr);
+  },
+  approve_pull_request: (a): PullRequest => {
+    const pr = mockPulls.find((p) => p.number === Number(a.prNumber));
+    if (!pr) throw new Error(`pull request #${a.prNumber} not found`);
+    pr.approved = true;
+    return structuredClone(pr);
+  },
+  merge_pull_request: (a): PullRequest => {
+    const pr = mockPulls.find((p) => p.number === Number(a.prNumber));
+    if (!pr) throw new Error(`pull request #${a.prNumber} not found`);
+    pr.state = "merged";
+    pr.updatedAt = new Date().toISOString();
+    return structuredClone(pr);
+  },
+  list_review_comments: (a): ReviewComment[] => {
+    const pr = a.prNumber as number | null | undefined;
+    const requestId = a.requestId as string | null | undefined;
+    return structuredClone(
+      mockComments.filter((c) => (pr == null || c.prNumber === pr) && (!requestId || c.requestId === requestId)),
+    );
+  },
+  add_review_comment: (a): ReviewComment => {
+    const input = a.input as AddReviewCommentInput;
+    const w = ws(a.workspaceId);
+    const found = input.requestId ? findRequest(w, input.requestId) : null;
+    const comment: ReviewComment = {
+      id: uid(),
+      prNumber: input.prNumber ?? undefined,
+      requestId: input.requestId ?? undefined,
+      requestName: found?.request.name,
+      path: input.path || "collections/orders-api/orders/create-order.req.yaml",
+      field: input.field || "general",
+      line: input.line ?? 1,
+      body: input.body,
+      author: "Ada Lovelace",
+      createdAt: new Date().toISOString(),
+      resolved: false,
+      source: input.prNumber ? "github" : "local",
+    };
+    mockComments.push(comment);
+    const pr = mockPulls.find((p) => p.number === input.prNumber);
+    if (pr) pr.commentCount += 1;
+    return structuredClone(comment);
+  },
+  resolve_review_comment: (a): ReviewComment => {
+    const c = mockComments.find((x) => x.id === a.commentId);
+    if (!c) throw new Error("review comment not found");
+    c.resolved = !!a.resolved;
+    return structuredClone(c);
+  },
+
+  // Phase 2: semantic conflict preview & resolution
+  git_conflict_preview: (a): ConflictPreview => {
+    const choices = (a.choices as Record<string, MergeSide> | undefined) ?? {};
+    const chosen = choices["headers.Authorization"] ?? "ours";
+    const value = { base: "Bearer {{token}}", ours: "Bearer {{adminToken}}", theirs: "Bearer {{serviceToken}}" }[chosen];
+    return {
+      stages: { base: CONFLICT_BASE, ours: CONFLICT_OURS, theirs: CONFLICT_THEIRS },
+      semantic: {
+        path: s(a, "path"),
+        kind: "request",
+        canAutoMerge: false,
+        autoMerged: ["Header `X-Client` (ours)", "Query param `dryRun` (theirs)"],
+        conflicts: [
+          {
+            id: "headers.Authorization",
+            section: "Headers",
+            field: "Authorization",
+            label: "Header `Authorization`",
+            base: "Bearer {{token}}",
+            ours: "Bearer {{adminToken}}",
+            theirs: "Bearer {{serviceToken}}",
+            chosen,
+          },
+        ],
+        mergedYaml: `id: req-create-order\nname: Create order\nmethod: POST\nurl: '{{baseUrl}}/v1/orders'\nparams:\n- key: dryRun\n  value: 'true'\nheaders:\n- key: Authorization\n  value: ${value}\n- key: X-Client\n  value: web\n`,
+      },
+    };
+  },
+  git_resolve_semantic: (a) => handlers.git_resolve({ path: a.path }),
+
+  // Phase 2: stashes, cherry-pick, revert, tags, sparse checkout, signing
+  git_stashes: (): StashEntry[] => structuredClone(mockStashes),
+  git_stash_push: (a) => {
+    const changed = gitState.files.filter((f) => !f.untracked || a.includeUntracked);
+    if (changed.length === 0) throw new Error("No local changes to save");
+    gitState.files = gitState.files.filter((f) => !changed.includes(f));
+    mockStashes.unshift({ index: 0, reference: "stash@{0}", message: `On ${gitState.branch}: ${(a.message as string | null) || "WIP"}`, date: now() });
+    renumberStashes();
+  },
+  git_stash_apply: (a): MergeOutcome => {
+    if (a.pop) {
+      mockStashes.splice(Number(a.index), 1);
+      renumberStashes();
+    }
+    return { kind: "merged" };
+  },
+  git_stash_drop: (a) => {
+    mockStashes.splice(Number(a.index), 1);
+    renumberStashes();
+  },
+  git_cherry_pick: (a): MergeOutcome => {
+    gitState.commits.unshift({ subject: `Cherry-pick ${s(a, "commit").slice(0, 7)}`, author: "Ada Lovelace", ago: 0 });
+    return { kind: "merged" };
+  },
+  git_revert: (a): MergeOutcome => {
+    const target = (handlers.git_log({}) as Commit[]).find((c) => c.hash === a.commit);
+    gitState.commits.unshift({ subject: `Revert "${target?.subject ?? s(a, "commit").slice(0, 7)}"`, author: "Ada Lovelace", ago: 0 });
+    return { kind: "merged" };
+  },
+  git_tags: (): Tag[] => structuredClone(mockTags),
+  git_create_tag: (a) => {
+    const name = s(a, "name");
+    if (mockTags.some((t) => t.name === name)) throw new Error(`tag '${name}' already exists`);
+    const hash = (a.target as string | null) || "a".repeat(40);
+    mockTags.unshift({ name, hash, shortHash: hash.slice(0, 7), message: (a.message as string | null) || null, date: now() });
+  },
+  git_delete_tag: (a) => void (mockTags = mockTags.filter((t) => t.name !== a.name)),
+  git_push_tag: () => delay(300),
+  git_sparse_checkout_status: (): SparseCheckoutStatus => structuredClone(mockSparse),
+  git_sparse_checkout_set: (a) => void (mockSparse = { enabled: true, cone: a.cone !== false, patterns: (a.patterns as string[]).filter(Boolean) }),
+  git_sparse_checkout_disable: () => void (mockSparse = { enabled: false, cone: true, patterns: [] }),
+  git_signing_settings: (): SigningSettings => structuredClone(mockSigning),
+  git_set_signing_settings: (a) => void (mockSigning = structuredClone(a.settings as SigningSettings)),
 };
+
+const MOCK_TEMPLATES: WorkspaceTemplate[] = [
+  { id: "blank", name: "Blank workspace", description: "One collection with a health check and a Development environment.", tags: ["starter"], environments: ["Development"], requestCount: 1 },
+  { id: "rest-crud", name: "REST CRUD API", description: "List, create, read, update and delete with tests, plus Local and Staging environments.", tags: ["rest"], environments: ["Local", "Staging"], requestCount: 5 },
+  { id: "graphql-service", name: "GraphQL service", description: "Queries and a mutation with variables and response assertions.", tags: ["graphql"], environments: ["Local"], requestCount: 2 },
+  { id: "oauth2-microservice", name: "OAuth 2.0 microservice", description: "Client-credentials auth on the collection, protected endpoints inherit it.", tags: ["auth"], environments: ["Local", "Staging"], requestCount: 2 },
+  { id: "webhook-suite", name: "Webhook test suite", description: "Signed webhook deliveries with idempotency keys and replay checks.", tags: ["events"], environments: ["Local"], requestCount: 2 },
+];
+
+const CONFLICT_BASE = "id: req-create-order\nname: Create order\nmethod: POST\nurl: '{{baseUrl}}/v1/orders'\nheaders:\n- key: Authorization\n  value: Bearer {{token}}\n";
+const CONFLICT_OURS = "id: req-create-order\nname: Create order\nmethod: POST\nurl: '{{baseUrl}}/v1/orders'\nheaders:\n- key: Authorization\n  value: Bearer {{adminToken}}\n- key: X-Client\n  value: web\n";
+const CONFLICT_THEIRS = "id: req-create-order\nname: Create order\nmethod: POST\nurl: '{{baseUrl}}/v1/orders'\nparams:\n- key: dryRun\n  value: 'true'\nheaders:\n- key: Authorization\n  value: Bearer {{serviceToken}}\n";
+
+let mockVault: VaultSettings = { useOsKeychain: true };
+let mockPrSettings: PrSettings = {};
+
+const mockPulls: PullRequest[] = [
+  {
+    number: 41,
+    title: "Add refund flow requests and idempotency checks",
+    body: "Adds `POST /v1/orders/{{orderId}}/refund` and asserts the Idempotency-Key replay.",
+    state: "open",
+    draft: false,
+    author: "grace",
+    sourceBranch: "feature/refunds",
+    targetBranch: "main",
+    webUrl: "https://github.com/acme/payments-service/pull/41",
+    createdAt: new Date(Date.now() - 5 * 3600_000).toISOString(),
+    updatedAt: new Date(Date.now() - 1800_000).toISOString(),
+    approved: false,
+    commentCount: 1,
+    provider: "github",
+  },
+];
+
+const mockComments: ReviewComment[] = [
+  {
+    id: "rc-1",
+    prNumber: 41,
+    path: "collections/orders-api/orders/create-order.req.yaml",
+    field: "headers.Idempotency-Key",
+    line: 8,
+    requestName: "Create order",
+    body: "Can we also assert that replaying the same Idempotency-Key returns the first response?",
+    author: "Grace Hopper",
+    createdAt: new Date(Date.now() - 3600_000).toISOString(),
+    resolved: false,
+    source: "github",
+  },
+];
+
+const mockStashes: StashEntry[] = [{ index: 0, reference: "stash@{0}", message: "On feature/refunds: webhook retry headers", date: now() - 7200 }];
+const renumberStashes = () =>
+  mockStashes.forEach((st, i) => {
+    st.index = i;
+    st.reference = `stash@{${i}}`;
+  });
+
+let mockTags: Tag[] = [{ name: "v1.2.0", hash: `${2}`.padStart(40, "a"), shortHash: "aaaaaaa", message: "Collections for the 1.2 release", date: now() - 3 * 86400 }];
+let mockSparse: SparseCheckoutStatus = { enabled: false, cone: true, patterns: [] };
+let mockSigning: SigningSettings = { enabled: false, format: "ssh", signingKey: null, program: null };
 
 export async function mockInvoke<T>(cmd: string, args: Args): Promise<T> {
   const handler = handlers[cmd];

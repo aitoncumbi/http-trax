@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::{Branch, ChangedFile, Commit, FileStatus, RepoStatus};
+use crate::{
+    Branch, ChangedFile, Commit, FileStatus, RepoStatus, SignatureStatus, StashEntry, Tag,
+};
 
 fn in_workspace(path: &str, prefix: &str) -> bool {
     prefix.is_empty() || path == prefix || path.starts_with(&format!("{prefix}/"))
@@ -146,10 +148,27 @@ pub fn commits(out: &str) -> Vec<Commit> {
         if rec.is_empty() {
             continue;
         }
-        let f: Vec<&str> = rec.splitn(8, '\u{1f}').collect();
+        let f: Vec<&str> = rec.split('\u{1f}').collect();
         if f.len() < 8 {
             continue;
         }
+        let signature_status = match f.get(8).map(|s| s.trim()) {
+            Some("G") => Some(SignatureStatus::Good),
+            Some("U") => Some(SignatureStatus::Untrusted),
+            Some("B") => Some(SignatureStatus::Bad),
+            Some("X" | "Y") => Some(SignatureStatus::Expired),
+            Some("R") => Some(SignatureStatus::Revoked),
+            Some("E") => Some(SignatureStatus::CannotCheck),
+            _ => None,
+        };
+        let signer = f
+            .get(9)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let signing_key = f
+            .get(10)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         list.push(Commit {
             hash: f[0].to_string(),
             short_hash: f[1].to_string(),
@@ -163,6 +182,62 @@ pub fn commits(out: &str) -> Vec<Commit> {
                 .map(str::to_string)
                 .collect(),
             subject: f[7].trim_end().to_string(),
+            signature_status,
+            signer,
+            signing_key,
+        });
+    }
+    list
+}
+
+/// `git stash list --format=%gd%x1f%gs%x1f%at%x1e`
+pub fn stashes(out: &str) -> Vec<StashEntry> {
+    let mut list = Vec::new();
+    for rec in out.split('\u{1e}') {
+        let rec = rec.trim_start_matches('\n');
+        if rec.is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = rec.split('\u{1f}').collect();
+        if f.len() < 3 {
+            continue;
+        }
+        let reference = f[0].trim().to_string();
+        let index = reference
+            .strip_prefix("stash@{")
+            .and_then(|s| s.strip_suffix('}'))
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(list.len());
+        list.push(StashEntry {
+            index,
+            reference,
+            message: f[1].trim().to_string(),
+            date: f[2].trim().parse().unwrap_or(0),
+        });
+    }
+    list
+}
+
+/// `git for-each-ref` for `refs/tags`.
+pub fn tags(out: &str) -> Vec<Tag> {
+    let mut list = Vec::new();
+    for rec in out.split('\u{1e}') {
+        let rec = rec.trim_start_matches('\n');
+        if rec.is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = rec.split('\u{1f}').collect();
+        if f.len() < 5 {
+            continue;
+        }
+        let target_hash = f.get(5).map(|s| s.trim()).filter(|s| !s.is_empty());
+        let target_short = f.get(6).map(|s| s.trim()).filter(|s| !s.is_empty());
+        list.push(Tag {
+            name: f[0].trim().to_string(),
+            hash: target_hash.unwrap_or(f[1].trim()).to_string(),
+            short_hash: target_short.unwrap_or(f[2].trim()).to_string(),
+            message: Some(f[3].trim().to_string()).filter(|s| !s.is_empty()),
+            date: f[4].trim().parse().ok(),
         });
     }
     list

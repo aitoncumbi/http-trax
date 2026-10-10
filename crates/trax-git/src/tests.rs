@@ -290,3 +290,104 @@ fn contributors_are_counted_by_email() {
     git.init("main").unwrap();
     assert_eq!(git.contributors(100).unwrap(), 0);
 }
+
+#[test]
+fn stash_cherry_pick_revert_and_tags() {
+    let (_root, alice, bob) = team();
+    write(&alice, "wip.req.yaml", "name: wip\n");
+    alice.stash_push(Some("half done"), true).unwrap();
+    assert!(alice.status().unwrap().files.is_empty());
+    let stashes = alice.stashes().unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert!(stashes[0].message.contains("half done"));
+
+    alice.stash_apply(0, true).unwrap();
+    assert!(alice.stashes().unwrap().is_empty());
+    assert!(alice.dir().join("wip.req.yaml").exists());
+    alice.stage(&[]).unwrap();
+    let c = alice.commit("add wip", false).unwrap();
+
+    alice.create_tag("v1.0.0", None, Some("Release 1")).unwrap();
+    let tags = alice.tags().unwrap();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].name, "v1.0.0");
+    assert_eq!(tags[0].hash, c.hash);
+    alice.push_tag("v1.0.0", None).unwrap();
+    alice.delete_tag("v1.0.0").unwrap();
+    assert!(alice.tags().unwrap().is_empty());
+
+    // Revert the commit, then cherry-pick it back.
+    alice.revert(&c.hash).unwrap();
+    assert!(!alice.dir().join("wip.req.yaml").exists());
+    alice.cherry_pick(&c.hash).unwrap();
+    assert!(alice.dir().join("wip.req.yaml").exists());
+
+    // Push and verify bob's sync report includes changed_requests and authors.
+    alice.push(None, false).unwrap();
+    let report = sync_once(bob.dir(), &SyncOptions::default());
+    assert!(report.pulled > 0);
+    assert!(report.authors.contains(&"alice".to_string()));
+    assert!(report.changed_requests.contains(&"wip".to_string()));
+}
+
+#[test]
+fn conflict_stages_signing_and_sparse_checkout() {
+    let (_root, alice, bob) = team();
+    write(&alice, "api.req.yaml", "name: get\nurl: /alice\n");
+    alice.stage(&[]).unwrap();
+    alice.commit("alice", false).unwrap();
+    alice.push(None, false).unwrap();
+
+    write(&bob, "api.req.yaml", "name: get\nurl: /bob\n");
+    bob.stage(&[]).unwrap();
+    bob.commit("bob", false).unwrap();
+    let _ = bob.pull(PullMode::Merge).unwrap();
+
+    let stages = bob.conflict_stages("api.req.yaml").unwrap();
+    assert!(stages.base.unwrap().contains("/v1"));
+    assert!(stages.ours.unwrap().contains("/bob"));
+    assert!(stages.theirs.unwrap().contains("/alice"));
+
+    bob.resolve_with_content("api.req.yaml", "name: get\nurl: /merged\n")
+        .unwrap();
+    bob.continue_merge().unwrap();
+    assert!(!bob.merge_in_progress());
+
+    // Signing settings round-trip
+    let s = SigningSettings {
+        enabled: true,
+        format: SigningFormat::Ssh,
+        signing_key: Some("ssh-ed25519 AAAAC3Nza...".into()),
+        program: None,
+    };
+    bob.set_signing_settings(&s).unwrap();
+    let read_s = bob.signing_settings().unwrap();
+    assert!(read_s.enabled);
+    assert_eq!(read_s.format, SigningFormat::Ssh);
+    assert_eq!(
+        read_s.signing_key.as_deref(),
+        Some("ssh-ed25519 AAAAC3Nza...")
+    );
+    bob.set_signing_settings(&SigningSettings::default())
+        .unwrap();
+
+    // Sparse checkout
+    fs::create_dir_all(bob.dir().join("services/orders")).unwrap();
+    fs::create_dir_all(bob.dir().join("services/billing")).unwrap();
+    fs::write(bob.dir().join("services/orders/a.req.yaml"), "name: a\n").unwrap();
+    fs::write(bob.dir().join("services/billing/b.req.yaml"), "name: b\n").unwrap();
+    bob.stage(&[]).unwrap();
+    bob.commit("monorepo dirs", false).unwrap();
+
+    bob.sparse_checkout_set(&["services/orders".into()], true)
+        .unwrap();
+    let sp = bob.sparse_checkout_status().unwrap();
+    assert!(sp.enabled);
+    assert!(sp.patterns.iter().any(|p| p.contains("services/orders")));
+    assert!(bob.dir().join("services/orders/a.req.yaml").exists());
+    assert!(!bob.dir().join("services/billing/b.req.yaml").exists());
+
+    bob.sparse_checkout_disable().unwrap();
+    assert!(!bob.sparse_checkout_status().unwrap().enabled);
+    assert!(bob.dir().join("services/billing/b.req.yaml").exists());
+}

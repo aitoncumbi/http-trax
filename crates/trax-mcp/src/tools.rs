@@ -88,12 +88,14 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "init_workspace",
             "title": "Create or open a workspace",
-            "description": "Create an http-trax workspace in a directory (for example `api-tests/` inside the service repository) or open an existing one, and register it so it appears in the desktop app.",
+            "description": "Create an http-trax workspace in a directory (optionally from a starter template or team onboarding link) or open an existing one, and register it so it appears in the desktop app.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Directory for the workspace. Created if missing." },
-                    "name": { "type": "string", "description": "Display name (defaults to the directory name)." }
+                    "name": { "type": "string", "description": "Display name (defaults to the directory name)." },
+                    "template": { "type": "string", "description": "Optional starter template id: `rest-crud`, `graphql-service`, `oauth2-microservice`, `webhook-suite`, or `blank`." },
+                    "onboarding_link": { "type": "string", "description": "Optional `courion://onboard?...` team onboarding link to apply." }
                 },
                 "required": ["path"]
             },
@@ -246,7 +248,7 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "upsert_environment",
             "title": "Create or update an environment",
-            "description": "Create an environment or update one (matched by name or id). Variables are merged into the existing ones unless replace=true. Mark credentials as secret so they stay out of git.",
+            "description": "Create an environment or update one (matched by name or id). Variables are merged into the existing ones unless replace=true. Mark credentials as secret so they stay out of git (or use external vault references like `op://vault/item/field`, `vault://mount/path#field`, or `azkv://vault/secret`).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -356,6 +358,150 @@ pub fn tool_definitions() -> Vec<Value> {
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
         }),
+        json!({
+            "name": "list_workspace_templates",
+            "title": "List starter workspace templates",
+            "description": "List built-in starter templates (`rest-crud`, `graphql-service`, `oauth2-microservice`, `webhook-suite`, `blank`) that can be passed to `init_workspace`.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": read_only,
+        }),
+        json!({
+            "name": "create_onboarding_link",
+            "title": "Create a team onboarding link",
+            "description": "Generate a `courion://onboard?...` team onboarding link that clones a repository and configures the workspace environment in one step.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "repo_url": { "type": "string", "description": "Optional Git remote URL (defaults to `origin`)." },
+                    "branch": { "type": "string", "description": "Optional branch name." }
+                }
+            },
+            "annotations": read_only,
+        }),
+        json!({
+            "name": "list_pull_requests",
+            "title": "List pull or merge requests",
+            "description": "List open, merged, or closed pull requests (GitHub) or merge requests (GitLab) for the workspace repository.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "state": { "type": "string", "description": "`open` (default), `merged`, `closed`, or `all`." }
+                }
+            },
+            "annotations": read_only,
+        }),
+        json!({
+            "name": "create_pull_request",
+            "title": "Create a pull or merge request",
+            "description": "Open a Pull Request on GitHub or Merge Request on GitLab for the workspace's changes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "title": { "type": "string" },
+                    "body": { "type": "string" },
+                    "source_branch": { "type": "string", "description": "Defaults to current branch." },
+                    "target_branch": { "type": "string", "description": "Defaults to `main`." },
+                    "draft": { "type": "boolean" }
+                },
+                "required": ["title"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true },
+        }),
+        json!({
+            "name": "approve_pull_request",
+            "title": "Approve a pull or merge request",
+            "description": "Submit an approval review on a GitHub Pull Request or GitLab Merge Request.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "pr_number": { "type": "integer" },
+                    "body": { "type": "string" }
+                },
+                "required": ["pr_number"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true },
+        }),
+        json!({
+            "name": "merge_pull_request",
+            "title": "Merge a pull or merge request",
+            "description": "Merge an open GitHub Pull Request or GitLab Merge Request.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "pr_number": { "type": "integer" },
+                    "method": { "type": "string", "description": "`merge` (default), `squash`, or `rebase`." }
+                },
+                "required": ["pr_number"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true },
+        }),
+        json!({
+            "name": "list_review_comments",
+            "title": "List inline review comments on requests",
+            "description": "List inline review comments mapped to Courion requests and semantic fields (`url`, `headers.<Key>`, `params.<Key>`, `body`, `auth`, `scripts.postResponse`).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "pr_number": { "type": "integer", "description": "Optional PR/MR number filter." },
+                    "request": { "type": "string", "description": "Optional request id, path, or name filter." }
+                }
+            },
+            "annotations": read_only,
+        }),
+        json!({
+            "name": "add_review_comment",
+            "title": "Add an inline review comment on a request field",
+            "description": "Add an inline review comment anchored to a specific request and semantic field (`url`, `method`, `headers.<Key>`, `params.<Key>`, `body`, `auth`, `scripts.preRequest`, `scripts.postResponse`), optionally posting it to a GitHub PR or GitLab MR.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "request": request_ref_prop(),
+                    "field": { "type": "string", "description": "Semantic field, e.g. `headers.Authorization`, `params.limit`, `url`, `body`, `scripts.postResponse`." },
+                    "body": { "type": "string", "description": "Comment text." },
+                    "pr_number": { "type": "integer", "description": "Optional PR/MR number to also post the comment to." }
+                },
+                "required": ["request", "body"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true },
+        }),
+        json!({
+            "name": "resolve_review_comment",
+            "title": "Resolve or unresolve a review comment",
+            "description": "Mark an inline review comment as resolved or unresolved.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "comment_id": { "type": "string" },
+                    "resolved": { "type": "boolean", "description": "Defaults to true." }
+                },
+                "required": ["comment_id"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+        }),
+        json!({
+            "name": "semantic_merge_file",
+            "title": "Semantic 3-way merge for a request or workspace YAML file",
+            "description": "Run a field-level semantic 3-way merge on a conflicted workspace file (merging headers, query params, variables, JSON body keys, and scripts) and optionally write & stage the merged result.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "path": { "type": "string", "description": "Relative path of the conflicted file in the workspace." },
+                    "choices": { "type": "object", "description": "Optional map of conflict field id -> `ours` | `theirs` | `base`." },
+                    "apply": { "type": "boolean", "description": "Write the merged YAML and mark the conflict resolved in git when true." }
+                },
+                "required": ["path"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+        }),
     ]
 }
 
@@ -387,6 +533,16 @@ pub async fn call(server: &Server, name: &str, args: &Value) -> Result<ToolOutpu
         "move_item" => move_item(server, args),
         "list_history" => list_history(server, args),
         "restore_history_entry" => restore_history_entry(server, args),
+        "list_workspace_templates" => list_workspace_templates_tool(),
+        "create_onboarding_link" => create_onboarding_link_tool(server, args),
+        "list_pull_requests" => list_pull_requests_tool(server, args),
+        "create_pull_request" => create_pull_request_tool(server, args),
+        "approve_pull_request" => approve_pull_request_tool(server, args),
+        "merge_pull_request" => merge_pull_request_tool(server, args),
+        "list_review_comments" => list_review_comments_tool(server, args),
+        "add_review_comment" => add_review_comment_tool(server, args),
+        "resolve_review_comment" => resolve_review_comment_tool(server, args),
+        "semantic_merge_file" => semantic_merge_file_tool(server, args),
         other => Err(format!("unknown tool `{other}`")),
     }?;
     if !perms.read_secrets {
@@ -410,7 +566,13 @@ fn check_allowed(tool: &str, perms: &AgentPermissions) -> Result<(), String> {
         | "delete_request"
         | "import_spec"
         | "move_item"
-        | "restore_history_entry" => (perms.edit_requests, "Create and edit requests"),
+        | "restore_history_entry"
+        | "create_pull_request"
+        | "approve_pull_request"
+        | "merge_pull_request"
+        | "add_review_comment"
+        | "resolve_review_comment"
+        | "semantic_merge_file" => (perms.edit_requests, "Create and edit requests"),
         "run_request" | "run_collection" | "send_http_request" | "clear_cookies" => {
             (perms.run_requests, "Run requests and tests")
         }
@@ -758,20 +920,44 @@ fn list_workspaces(server: &Server) -> Result<ToolOutput, String> {
 fn init_workspace(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let path = req_str(args, "path")?;
     let path = std::path::absolute(Path::new(path)).map_err(err)?;
+    let onboard_spec = match opt_str(args, "onboarding_link") {
+        Some(link) if !link.trim().is_empty() => {
+            Some(trax_core::parse_onboarding_link(link).map_err(err)?)
+        }
+        _ => None,
+    };
     let name = opt_str(args, "name")
         .map(str::to_string)
+        .or_else(|| onboard_spec.as_ref().map(|s| s.name.clone()))
         .unwrap_or_else(|| {
             path.file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "API workspace".into())
         });
+    let tpl_id = opt_str(args, "template")
+        .or_else(|| onboard_spec.as_ref().and_then(|s| s.template_id.as_deref()));
     let (ws, created) = if Workspace::is_workspace(&path) {
         (Workspace::open(&path).map_err(err)?, false)
+    } else if let Some(tpl) = tpl_id.filter(|t| !t.trim().is_empty()) {
+        (
+            trax_core::create_workspace_from_template(&path, &name, tpl).map_err(err)?,
+            true,
+        )
     } else {
         (Workspace::init(&path, &name).map_err(err)?, true)
     };
+    let mut active_env = None;
+    if let Some(spec) = &onboard_spec {
+        active_env = trax_core::apply_onboarding_spec(&ws, spec, &BTreeMap::new()).map_err(err)?;
+    }
     let mut reg = registry(server)?;
-    let entry = reg.register(&ws).map_err(err)?;
+    let mut entry = reg.register(&ws).map_err(err)?;
+    if let Some(env_id) = active_env {
+        if let Some(e) = reg.get_mut(&entry.id) {
+            e.prefs.active_environment = Some(env_id);
+            entry = e.clone();
+        }
+    }
     trax_core::registry::ensure_dir(reg.dir()).map_err(err)?;
     reg.save().map_err(err)?;
     if created {
@@ -1538,5 +1724,270 @@ fn restore_history_entry(server: &Server, args: &Value) -> Result<ToolOutput, St
     Ok(ToolOutput::with(
         format!("{} [{}]", what, created.id),
         serde_json::to_value(&created).map_err(err)?,
+    ))
+}
+
+fn ws_remote_url(ws: &Workspace) -> Option<String> {
+    let git = trax_git::Git::new(ws.root());
+    git.remotes()
+        .ok()?
+        .into_iter()
+        .find(|r| r.name == "origin")
+        .map(|r| r.url)
+}
+
+fn list_workspace_templates_tool() -> Result<ToolOutput, String> {
+    let templates = trax_core::list_workspace_templates();
+    let mut text = String::new();
+    for t in &templates {
+        text.push_str(&format!(
+            "- {} (`{}`): {} ({} requests)\n",
+            t.name, t.id, t.description, t.request_count
+        ));
+    }
+    Ok(ToolOutput::with(text, json!({ "templates": templates })))
+}
+
+fn create_onboarding_link_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let git = trax_git::Git::new(ws.root());
+    let repo_url = opt_str(args, "repo_url")
+        .map(str::to_string)
+        .or_else(|| ws_remote_url(&ws));
+    let branch = opt_str(args, "branch")
+        .map(str::to_string)
+        .or_else(|| git.status().ok().and_then(|s| s.head));
+    let sparse = git
+        .sparse_checkout_status()
+        .map(|s| s.patterns)
+        .unwrap_or_default();
+    let link =
+        trax_core::build_onboarding_link(&ws, repo_url.as_deref(), branch.as_deref(), &sparse)
+            .map_err(err)?;
+    Ok(ToolOutput::with(
+        format!("Team onboarding link: {link}"),
+        json!({ "link": link }),
+    ))
+}
+
+fn list_pull_requests_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let remote = ws_remote_url(&ws);
+    let state = opt_str(args, "state");
+    let prs = trax_core::list_pull_requests(&ws, remote.as_deref(), state).map_err(err)?;
+    if prs.is_empty() {
+        return Ok(ToolOutput::with(
+            "No pull requests found.",
+            json!({ "pullRequests": [] }),
+        ));
+    }
+    let mut text = String::new();
+    for pr in &prs {
+        text.push_str(&format!(
+            "- #{} [{}] {} ({} -> {}) by @{}{}\n",
+            pr.number,
+            pr.state,
+            pr.title,
+            pr.source_branch,
+            pr.target_branch,
+            pr.author,
+            if pr.approved { " [approved]" } else { "" }
+        ));
+    }
+    Ok(ToolOutput::with(text, json!({ "pullRequests": prs })))
+}
+
+fn create_pull_request_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let remote = ws_remote_url(&ws);
+    let git = trax_git::Git::new(ws.root());
+    let title = req_str(args, "title")?.to_string();
+    let body = opt_str(args, "body").unwrap_or_default().to_string();
+    let source_branch = opt_str(args, "source_branch")
+        .map(str::to_string)
+        .or_else(|| git.status().ok().and_then(|s| s.head))
+        .unwrap_or_else(|| "feat/api-changes".into());
+    let target_branch = opt_str(args, "target_branch").unwrap_or("main").to_string();
+    let draft = opt_bool(args, "draft").unwrap_or(false);
+
+    let pr = trax_core::create_pull_request(
+        &ws,
+        remote.as_deref(),
+        trax_core::CreatePullRequestInput {
+            title,
+            body,
+            source_branch,
+            target_branch,
+            draft,
+        },
+    )
+    .map_err(err)?;
+    let what = format!("Created PR #{}: {}", pr.number, pr.title);
+    server.record(&ws, ActivityKind::Created, what.clone());
+    Ok(ToolOutput::with(
+        format!("{what} ({})", pr.web_url),
+        serde_json::to_value(&pr).map_err(err)?,
+    ))
+}
+
+fn approve_pull_request_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let remote = ws_remote_url(&ws);
+    let pr_number = opt_u64(args, "pr_number").ok_or("missing `pr_number`")?;
+    let body = opt_str(args, "body");
+    let pr =
+        trax_core::approve_pull_request(&ws, remote.as_deref(), pr_number, body).map_err(err)?;
+    let what = format!("Approved PR #{pr_number}");
+    server.record(&ws, ActivityKind::Edited, what.clone());
+    Ok(ToolOutput::with(
+        what,
+        serde_json::to_value(&pr).map_err(err)?,
+    ))
+}
+
+fn merge_pull_request_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let remote = ws_remote_url(&ws);
+    let pr_number = opt_u64(args, "pr_number").ok_or("missing `pr_number`")?;
+    let method = opt_str(args, "method");
+    let pr =
+        trax_core::merge_pull_request(&ws, remote.as_deref(), pr_number, method).map_err(err)?;
+    let what = format!("Merged PR #{pr_number}");
+    server.record(&ws, ActivityKind::Edited, what.clone());
+    Ok(ToolOutput::with(
+        what,
+        serde_json::to_value(&pr).map_err(err)?,
+    ))
+}
+
+fn list_review_comments_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let remote = ws_remote_url(&ws);
+    let pr_number = opt_u64(args, "pr_number");
+    let request_id = match opt_str(args, "request") {
+        Some(r) if !r.trim().is_empty() => Some(resolve_request(&ws, r)?),
+        _ => None,
+    };
+    let comments =
+        trax_core::list_review_comments(&ws, remote.as_deref(), pr_number, request_id.as_deref())
+            .map_err(err)?;
+    if comments.is_empty() {
+        return Ok(ToolOutput::with(
+            "No inline review comments.",
+            json!({ "comments": [] }),
+        ));
+    }
+    let mut text = String::new();
+    for c in &comments {
+        text.push_str(&format!(
+            "- [{}] {} ({} @ line {}) by @{}{}: {}\n",
+            c.id,
+            c.request_name.as_deref().unwrap_or(&c.path),
+            c.field,
+            c.line,
+            c.author,
+            if c.resolved { " [resolved]" } else { "" },
+            c.body
+        ));
+    }
+    Ok(ToolOutput::with(text, json!({ "comments": comments })))
+}
+
+fn add_review_comment_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let remote = ws_remote_url(&ws);
+    let req_id = resolve_request(&ws, req_str(args, "request")?)?;
+    let body = req_str(args, "body")?.to_string();
+    let field = opt_str(args, "field").map(str::to_string);
+    let pr_number = opt_u64(args, "pr_number");
+
+    let comment = trax_core::add_review_comment(
+        &ws,
+        remote.as_deref(),
+        trax_core::AddReviewCommentInput {
+            pr_number,
+            request_id: Some(req_id),
+            path: None,
+            field,
+            line: None,
+            body,
+            author: Some(server.client_name()),
+        },
+    )
+    .map_err(err)?;
+    let what = format!(
+        "Added review comment on {} ({})",
+        comment.request_name.as_deref().unwrap_or(&comment.path),
+        comment.field
+    );
+    server.record(&ws, ActivityKind::Created, what.clone());
+    Ok(ToolOutput::with(
+        format!("{what} [{}]", comment.id),
+        serde_json::to_value(&comment).map_err(err)?,
+    ))
+}
+
+fn resolve_review_comment_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let comment_id = req_str(args, "comment_id")?;
+    let resolved = opt_bool(args, "resolved").unwrap_or(true);
+    let comment = trax_core::resolve_review_comment(&ws, comment_id, resolved).map_err(err)?;
+    let what = format!(
+        "{} review comment {}",
+        if resolved { "Resolved" } else { "Reopened" },
+        comment.id
+    );
+    server.record(&ws, ActivityKind::Edited, what.clone());
+    Ok(ToolOutput::with(
+        what,
+        serde_json::to_value(&comment).map_err(err)?,
+    ))
+}
+
+fn semantic_merge_file_tool(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let path = req_str(args, "path")?;
+    let git = trax_git::Git::new(ws.root());
+    let stages = git.conflict_stages(path).map_err(err)?;
+    let mut choices = BTreeMap::new();
+    if let Some(obj) = args.get("choices").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            let side = match v.as_str().unwrap_or("ours") {
+                "theirs" => trax_core::MergeSide::Theirs,
+                "base" => trax_core::MergeSide::Base,
+                _ => trax_core::MergeSide::Ours,
+            };
+            choices.insert(k.clone(), side);
+        }
+    }
+    let preview = trax_core::semantic_merge(
+        path,
+        stages.base.as_deref(),
+        stages.ours.as_deref(),
+        stages.theirs.as_deref(),
+        &choices,
+    )
+    .ok_or_else(|| format!("`{path}` could not be parsed as a structured workspace YAML file"))?;
+
+    let apply = opt_bool(args, "apply").unwrap_or(false);
+    if apply {
+        git.resolve_with_content(path, &preview.merged_yaml)
+            .map_err(err)?;
+        server.record(
+            &ws,
+            ActivityKind::Edited,
+            format!("Resolved conflict in {path} via semantic merge"),
+        );
+    }
+
+    let summary = format!(
+        "Semantic merge for {path}: {} auto-merged field(s), {} conflict(s){}",
+        preview.auto_merged.len(),
+        preview.conflicts.len(),
+        if apply { " (applied & staged)" } else { "" }
+    );
+    Ok(ToolOutput::with(
+        summary,
+        serde_json::to_value(&preview).map_err(err)?,
     ))
 }

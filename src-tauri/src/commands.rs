@@ -95,8 +95,13 @@ pub async fn create_workspace(
     name: String,
     team: Option<String>,
     init_git: bool,
+    template: Option<String>,
 ) -> CmdResult<WorkspaceEntry> {
-    let ws = Workspace::init(&path, &name).str_err()?;
+    let ws = match template.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(tpl) => trax_core::create_workspace_from_template(Path::new(&path), &name, tpl),
+        None => Workspace::init(&path, &name),
+    }
+    .str_err()?;
     if let Some(team) = team.filter(|t| !t.trim().is_empty()) {
         let mut m = ws.manifest().str_err()?;
         m.team = Some(team.trim().to_string());
@@ -140,12 +145,19 @@ pub async fn clone_workspace(
     path: String,
     branch: Option<String>,
     subdir: Option<String>,
+    sparse_patterns: Option<Vec<String>>,
 ) -> CmdResult<WorkspaceEntry> {
     let dest = PathBuf::from(&path);
     let url2 = url.clone();
     let dest2 = dest.clone();
+    let patterns = sparse_patterns.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        trax_git::clone(&url2, &dest2, branch.as_deref().filter(|b| !b.is_empty()))
+        let b = branch.as_deref().filter(|b| !b.is_empty());
+        if !patterns.is_empty() {
+            trax_git::clone_sparse(&url2, &dest2, b, &patterns)
+        } else {
+            trax_git::clone(&url2, &dest2, b)
+        }
     })
     .await
     .str_err()?
@@ -704,4 +716,298 @@ pub async fn restore_history_entry(
         .workspace(&workspace_id)?
         .restore_history_entry(&entry_id, parent_id.as_deref())
         .str_err()
+}
+
+// -------------------------------------- Phase 2: templates & onboarding
+
+/// Run a blocking `trax-core` call (network, CLI tools) off the async runtime.
+async fn off_thread<T: Send + 'static>(
+    f: impl FnOnce() -> trax_core::Result<T> + Send + 'static,
+) -> CmdResult<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .str_err()?
+        .str_err()
+}
+
+/// URL of the workspace repository's `origin` remote, if any.
+async fn origin_url(state: &AppState, workspace_id: &str) -> Option<String> {
+    let git = state.git(workspace_id).ok()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        git.remotes()
+            .ok()?
+            .into_iter()
+            .find(|r| r.name == "origin")
+            .map(|r| r.url)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[tauri::command]
+pub async fn list_workspace_templates() -> CmdResult<Vec<WorkspaceTemplate>> {
+    Ok(trax_core::list_workspace_templates())
+}
+
+#[tauri::command]
+pub async fn create_onboarding_link(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    repo_url: Option<String>,
+    branch: Option<String>,
+) -> CmdResult<String> {
+    let ws = state.workspace(&workspace_id)?;
+    let git = state.git(&workspace_id)?;
+    let repo = match repo_url.filter(|s| !s.trim().is_empty()) {
+        Some(r) => Some(r),
+        None => origin_url(&state, &workspace_id).await,
+    };
+    let (head, sparse) = tauri::async_runtime::spawn_blocking(move || {
+        let head = git.status().ok().and_then(|s| s.branch);
+        let sparse = git
+            .sparse_checkout_status()
+            .map(|s| s.patterns)
+            .unwrap_or_default();
+        (head, sparse)
+    })
+    .await
+    .str_err()?;
+    let branch = branch.filter(|s| !s.trim().is_empty()).or(head);
+    trax_core::build_onboarding_link(&ws, repo.as_deref(), branch.as_deref(), &sparse).str_err()
+}
+
+#[tauri::command]
+pub async fn parse_onboarding_link(link: String) -> CmdResult<OnboardingSpec> {
+    trax_core::parse_onboarding_link(&link).str_err()
+}
+
+/// One-step onboarding: clone (sparse when the link says so), open or create
+/// the workspace, set up the shared environment and make it active.
+#[tauri::command]
+pub async fn onboard_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    link: String,
+    path: String,
+    secrets: Option<std::collections::BTreeMap<String, String>>,
+) -> CmdResult<WorkspaceEntry> {
+    let spec = trax_core::parse_onboarding_link(&link).str_err()?;
+    let root = PathBuf::from(&path);
+    if let Some(url) = spec.repo_url.clone().filter(|u| !u.trim().is_empty()) {
+        if !root.join(".git").exists() {
+            let dest = root.clone();
+            let branch = spec.branch.clone();
+            let sparse = spec.sparse_patterns.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let b = branch.as_deref().filter(|b| !b.is_empty());
+                if sparse.is_empty() {
+                    trax_git::clone(&url, &dest, b)
+                } else {
+                    trax_git::clone_sparse(&url, &dest, b, &sparse)
+                }
+            })
+            .await
+            .str_err()?
+            .str_err()?;
+        }
+    }
+    let ws = if Workspace::is_workspace(&root) {
+        Workspace::open(&root).str_err()?
+    } else if let Some(tpl) = spec.template_id.as_deref().filter(|t| !t.is_empty()) {
+        trax_core::create_workspace_from_template(&root, &spec.name, tpl).str_err()?
+    } else {
+        Workspace::init(&root, &spec.name).str_err()?
+    };
+    let active_env =
+        trax_core::apply_onboarding_spec(&ws, &spec, &secrets.unwrap_or_default()).str_err()?;
+    let entry = register(&app, &state, &ws)?;
+    match active_env {
+        Some(env_id) => state.update_registry(|reg| {
+            let e = reg.get_mut(&entry.id).ok_or("workspace not found")?;
+            e.prefs.active_environment = Some(env_id);
+            Ok(e.clone())
+        }),
+        None => Ok(entry),
+    }
+}
+
+// ------------------------------------------- Phase 2: vault & keychain
+
+#[tauri::command]
+pub async fn get_vault_settings(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<VaultSettings> {
+    let ws = state.workspace(&workspace_id)?;
+    trax_core::load_vault_settings(ws.root()).str_err()
+}
+
+#[tauri::command]
+pub async fn save_vault_settings(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    settings: VaultSettings,
+) -> CmdResult<()> {
+    let ws = state.workspace(&workspace_id)?;
+    trax_core::clear_secret_cache();
+    trax_core::save_vault_settings(ws.root(), &settings).str_err()
+}
+
+#[tauri::command]
+pub async fn vault_providers_status(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<Vec<VaultProviderStatus>> {
+    let root = state.workspace(&workspace_id)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || trax_core::vault_providers_status(&root))
+        .await
+        .str_err()
+}
+
+/// Resolve a vault reference (`op://`, `vault://`, `azkv://`, `keychain://`)
+/// to test the configuration. The value is returned to the UI only.
+#[tauri::command]
+pub async fn resolve_secret_reference(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    value: String,
+) -> CmdResult<String> {
+    let root = state.workspace(&workspace_id)?.root().to_path_buf();
+    off_thread(move || trax_core::resolve_secret_value(&root, &value)).await
+}
+
+// ------------------------------- Phase 2: pull requests & inline reviews
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrContext {
+    pub settings: PrSettings,
+    /// Hosting detected from the `origin` remote (GitHub / GitLab).
+    pub hosting: Option<HostingRepo>,
+}
+
+#[tauri::command]
+pub async fn get_pr_settings(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CmdResult<PrContext> {
+    let ws = state.workspace(&workspace_id)?;
+    let settings = trax_core::load_pr_settings(ws.root()).str_err()?;
+    let hosting = origin_url(&state, &workspace_id)
+        .await
+        .and_then(|u| trax_core::detect_hosting(&u, &settings));
+    Ok(PrContext { settings, hosting })
+}
+
+#[tauri::command]
+pub async fn save_pr_settings(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    settings: PrSettings,
+) -> CmdResult<()> {
+    let ws = state.workspace(&workspace_id)?;
+    trax_core::save_pr_settings(ws.root(), &settings).str_err()
+}
+
+#[tauri::command]
+pub async fn list_pull_requests(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    state_filter: Option<String>,
+) -> CmdResult<Vec<PullRequest>> {
+    let ws = state.workspace(&workspace_id)?;
+    let remote = origin_url(&state, &workspace_id).await;
+    off_thread(move || {
+        trax_core::list_pull_requests(&ws, remote.as_deref(), state_filter.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_pull_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    input: CreatePullRequestInput,
+) -> CmdResult<PullRequest> {
+    let ws = state.workspace(&workspace_id)?;
+    let remote = origin_url(&state, &workspace_id).await;
+    off_thread(move || trax_core::create_pull_request(&ws, remote.as_deref(), input)).await
+}
+
+#[tauri::command]
+pub async fn approve_pull_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    pr_number: u64,
+    body: Option<String>,
+) -> CmdResult<PullRequest> {
+    let ws = state.workspace(&workspace_id)?;
+    let remote = origin_url(&state, &workspace_id).await;
+    off_thread(move || {
+        trax_core::approve_pull_request(&ws, remote.as_deref(), pr_number, body.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn merge_pull_request(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    pr_number: u64,
+    method: Option<String>,
+) -> CmdResult<PullRequest> {
+    let ws = state.workspace(&workspace_id)?;
+    let remote = origin_url(&state, &workspace_id).await;
+    off_thread(move || {
+        trax_core::merge_pull_request(&ws, remote.as_deref(), pr_number, method.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_review_comments(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    pr_number: Option<u64>,
+    request_id: Option<String>,
+) -> CmdResult<Vec<ReviewComment>> {
+    let ws = state.workspace(&workspace_id)?;
+    let remote = origin_url(&state, &workspace_id).await;
+    off_thread(move || {
+        trax_core::list_review_comments(&ws, remote.as_deref(), pr_number, request_id.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn add_review_comment(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    mut input: AddReviewCommentInput,
+) -> CmdResult<ReviewComment> {
+    let ws = state.workspace(&workspace_id)?;
+    let remote = origin_url(&state, &workspace_id).await;
+    if input.author.is_none() {
+        if let Ok(git) = state.git(&workspace_id) {
+            input.author = tauri::async_runtime::spawn_blocking(move || {
+                git.identity().ok().and_then(|i| i.name)
+            })
+            .await
+            .ok()
+            .flatten();
+        }
+    }
+    off_thread(move || trax_core::add_review_comment(&ws, remote.as_deref(), input)).await
+}
+
+#[tauri::command]
+pub async fn resolve_review_comment(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    comment_id: String,
+    resolved: bool,
+) -> CmdResult<ReviewComment> {
+    let ws = state.workspace(&workspace_id)?;
+    trax_core::resolve_review_comment(&ws, &comment_id, resolved).str_err()
 }

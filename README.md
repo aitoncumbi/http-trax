@@ -13,14 +13,17 @@ The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, plus `http-
 - **Workspaces for every team.** A workspace is a folder you keep in git: its own repo for a team's shared collections, or `api-tests/` inside a service repo. Switch between as many as you need; the switcher groups them by team. Create one, open an existing folder, or clone a team repository. Large workspaces use an in-memory index with instant invalidation.
 - **Bookmarks, scope, and drag-and-drop.** Star a collection to pin it to the top. Use the crosshair to scope the sidebar to one collection and hide everything else. Drag and drop requests, folders and collections to reorder or move them across folders.
 - **Full git workflow.** Stage, commit, fetch, pull (merge, rebase or fast-forward only), push, branches, merge with conflict resolution, history, and a pull-request style **review** of any branch (commits, changed requests, diff, conflict check) with a one-click link to open the PR on GitHub, GitLab, Bitbucket or Azure DevOps.
-- **Always online.** A background worker fetches every workspace and fast-forwards when it's safe (no local commits, no uncommitted edits), so teammates' changes simply appear. It never merges or touches your work.
+- **Always online.** A background worker fetches every workspace and fast-forwards when it's safe (no local commits, no uncommitted edits), so teammates' changes simply appear, with a note of who changed which requests. It never merges or touches your work.
+- **Merges that understand requests.** When both sides edit the same request, environment or collection, Courion merges field by field: different headers, params or tests are combined automatically, and only a field both sides changed is left for you to pick in the conflict editor (or edit the merged file by hand).
+- **Pull requests without leaving the app.** Create, list, approve and merge GitHub pull requests and GitLab merge requests, and leave review comments pinned to a request field such as `headers.Authorization` or the tests; open comments also show on the request. Stash, cherry-pick, revert, tags, sparse checkout for monorepos, and commit signing (GPG, SSH, X.509) with a Verified badge in history.
+- **Onboarding in one step.** Start from a template (REST CRUD, GraphQL, OAuth 2.0 service, webhooks), or share an onboarding link: a teammate pastes it, and Courion clones the repository, opens the workspace and sets up the environment, asking only for its secrets.
 - **Scripts.** JavaScript pre-request and post-response scripts at request, folder and collection level, with tests and assertions (`courion.test` / `trax.test`, `courion.expect` / `trax.expect`), variable chaining, and a Postman-compatible `pm.*` subset. Scripts run in a sandbox with no file or network access.
 - **Saved responses.** Keep known-good responses as examples on a request. They're committed with the workspace.
 - **Readable reviews.** Source control shows what changed in a request or environment ("URL changed", "Header added", "Test added") instead of raw YAML, with the line diff one click away.
 - **Fast to drive from the keyboard.** Configurable keyboard shortcuts: Ctrl+K searches every request and command (Ctrl+. for actions), Ctrl+N creates a request, and a pasted cURL command becomes a request. Search recent runs under History and restore any history entry as a saved request. HTML responses can be previewed safely.
 - **Complete auth & TLS.** OAuth 2.0 (authorization code with PKCE, client credentials, device code, password grants, `private_key_jwt` client assertions, and RFC 7662 token introspection), Bearer, Basic, Digest (MD5/SHA-256), AWS Signature v4, NTLM, and API keys. Per-request HTTP/HTTPS/SOCKS5 proxy, custom CA certificates, and client certificates (mTLS).
 - **Everyday tools.** `{{variable}}` autocomplete with the resolved value on hover; copy any request as cURL or as fetch, axios, Python, Go or Rust code; search, filter (JSONPath & JMESPath), wrap, save responses, and virtualized rendering for multi-megabyte responses; plus a per-workspace cookie jar with a cookie manager.
-- **Environments done right for git.** Shared values are committed; secrets and values your scripts set (like fresh tokens) stay on your machine. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
+- **Environments done right for git.** Shared values are committed; values your scripts set (like fresh tokens) stay on your machine, and secrets go to the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service). A secret can also be a vault reference the whole team shares (`op://` 1Password, `vault://` HashiCorp Vault, `azkv://` Azure Key Vault), read when the request is sent. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
 - **MCP server for AI agents.** `courion-mcp` (`trax-mcp`) ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
 - **Import from anywhere.** Import OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments with example responses, HAR archives, Insomnia exports, and Bruno collections; `pm.*` scripts keep working.
 
@@ -65,6 +68,10 @@ Leave out `--workspace` to use whichever workspace is active in the app. The age
 | `run_request` / `run_collection` | Run and report status, tests, console output and body |
 | `send_http_request` | One-off request that isn't saved |
 | `list_history` / `restore_history_entry` | Search recent run history or restore a history run as a saved request |
+| `list_workspace_templates` / `create_onboarding_link` | Starter templates (also `init_workspace` with `template` or `onboarding_link`) and links for teammates |
+| `list_pull_requests`, `create_pull_request`, `approve_pull_request`, `merge_pull_request` | Pull requests on GitHub, merge requests on GitLab |
+| `list_review_comments`, `add_review_comment`, `resolve_review_comment` | Review comments pinned to a request field |
+| `semantic_merge_file` | Field-level merge preview (and resolution) of a conflicted request, environment or collection |
 | `get_workspace`, `get_request`, `list_environments`, `list_workspaces`, `list_saved_responses`, `delete_request`, `list_cookies`, `clear_cookies` | Read and tidy up |
 
 ## Scripting in 30 seconds
@@ -158,4 +165,4 @@ Project layout:
 
 ## Roadmap
 
-More importers (OpenAPI, Insomnia, HAR), more auth schemes (Digest, AWS SigV4), a CLI runner for CI, semantic merge for request files, PR review through the GitHub/GitLab APIs, MCP over HTTP to drive the live app, and more protocols. See [ROADMAP.md](ROADMAP.md).
+A CLI runner for CI, MCP over HTTP to drive the live app, contract checks, mock servers and monitors, then more protocols (WebSocket, SSE, gRPC) and auto-updates. See [ROADMAP.md](ROADMAP.md).
