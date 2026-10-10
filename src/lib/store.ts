@@ -90,7 +90,9 @@ export type Dialog =
   | { kind: "prompt"; title: string; label?: string; initial?: string; confirm?: string; resolve: (v: string | null) => void }
   | { kind: "confirm"; title: string; message: string; confirm?: string; danger?: boolean; resolve: (v: boolean) => void }
   | { kind: "workspace"; mode: "create" | "open" | "clone" }
-  | { kind: "import"; tab?: "curl" | "postman" };
+  | { kind: "import"; tab?: "curl" | "postman" }
+  | { kind: "code"; request: Request; parentId: string | null }
+  | { kind: "cookies"; domain?: string };
 
 export function tabDirty(tab: Tab): boolean {
   switch (tab.kind) {
@@ -109,6 +111,8 @@ interface State {
   activeWorkspaceId: string | null;
   tree: WorkspaceTree | null;
   treeError: string | null;
+  /** Session variables set by scripts (`trax.vars.set`), for previews. */
+  runtimeVars: Record<string, string>;
   sync: Record<string, SyncReport>;
   syncing: boolean;
   view: View;
@@ -184,6 +188,11 @@ interface Actions {
   confirm: (opts: { title: string; message: string; confirm?: string; danger?: boolean }) => Promise<boolean>;
   showWorkspaceDialog: (mode: "create" | "open" | "clone") => void;
   showImportDialog: (tab?: "curl" | "postman") => void;
+  /** Code snippets for an open tab's draft, or a saved request. */
+  showCodeDialog: (target: { tabId?: string; requestId?: string }) => Promise<void>;
+  copyAsCurl: (target: { tabId?: string; requestId?: string }) => Promise<void>;
+  /** Open the cookie manager, optionally on one domain. */
+  showCookies: (domain?: string) => void;
   closeDialog: () => void;
 }
 
@@ -225,6 +234,23 @@ export const useStore = create<Store>()((set, get) => {
 
   const findTab = (pred: (t: Tab) => boolean) => get().tabs.find(pred);
 
+  /** The request to export: an open tab's draft, or a saved request. */
+  const exportTarget = async (target: { tabId?: string; requestId?: string }): Promise<{ request: Request; parentId: string | null } | null> => {
+    const id = wsId();
+    if (!id) return null;
+    const tab = target.tabId ? (findTab((t) => t.id === target.tabId) as RequestTab | undefined) : undefined;
+    if (tab?.kind === "request") return { request: tab.draft, parentId: null };
+    if (!target.requestId) return null;
+    const open = findTab((t) => t.kind === "request" && t.requestId === target.requestId && t.workspaceId === id) as RequestTab | undefined;
+    if (open) return { request: open.draft, parentId: null };
+    try {
+      return { request: await api.getRequest(id, target.requestId), parentId: null };
+    } catch (e) {
+      fail(e);
+      return null;
+    }
+  };
+
   /** Protected environments (production) need a yes before anything is sent. */
   const confirmProtected = async (envId: string | null, action: string): Promise<boolean> => {
     const env = envId ? get().tree?.environments.find((e) => e.id === envId) : undefined;
@@ -257,6 +283,7 @@ export const useStore = create<Store>()((set, get) => {
     activeWorkspaceId: null,
     tree: null,
     treeError: null,
+    runtimeVars: {},
     sync: {},
     syncing: false,
     view: "collections",
@@ -327,8 +354,8 @@ export const useStore = create<Store>()((set, get) => {
       const id = wsId();
       if (!id) return;
       try {
-        const tree = await api.loadWorkspace(id);
-        if (wsId() === id) set({ tree, treeError: null });
+        const [tree, local] = await Promise.all([api.loadWorkspace(id), api.getLocalState(id).catch(() => null)]);
+        if (wsId() === id) set({ tree, treeError: null, runtimeVars: local?.runtimeVariables ?? {} });
       } catch (e) {
         set({ treeError: errorMessage(e) });
       }
@@ -845,6 +872,28 @@ export const useStore = create<Store>()((set, get) => {
 
     showWorkspaceDialog: (mode) => set({ dialog: { kind: "workspace", mode } }),
     showImportDialog: (tab) => set({ dialog: { kind: "import", tab } }),
+
+    showCodeDialog: async (target) => {
+      const found = await exportTarget(target);
+      if (found) set({ dialog: { kind: "code", ...found } });
+    },
+
+    copyAsCurl: async (target) => {
+      const id = wsId();
+      const found = await exportTarget(target);
+      if (!id || !found) return;
+      try {
+        const env = get().activeEntry()?.prefs.activeEnvironment ?? null;
+        const exported = await api.exportRequest(id, found.request, found.parentId, env, true);
+        const { generate } = await import("./codegen");
+        await navigator.clipboard.writeText(generate("curl", exported));
+        get().toast("success", exported.warnings.length ? `Copied as cURL. ${exported.warnings.join(" ")}` : "Copied as cURL");
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    showCookies: (domain) => set({ dialog: { kind: "cookies", domain } }),
 
     closeDialog: () => set({ dialog: null }),
   };

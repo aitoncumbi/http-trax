@@ -171,6 +171,123 @@ pub enum Auth {
         #[serde(default)]
         location: ApiKeyLocation,
     },
+    /// OAuth 2.0: the runner gets, caches and refreshes the access token.
+    #[serde(rename = "oauth2")]
+    OAuth2(Box<OAuth2>),
+}
+
+/// How an OAuth 2.0 access token is obtained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OAuth2Grant {
+    /// Machine to machine; the runner fetches tokens by itself.
+    #[default]
+    ClientCredentials,
+    /// The user signs in in the browser; PKCE and a loopback redirect.
+    AuthorizationCode,
+    /// The user enters a code on another device or in the browser.
+    DeviceCode,
+    /// Resource owner password (legacy, but common for internal APIs).
+    Password,
+}
+
+/// Where the client id and secret go in token requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OAuth2ClientAuth {
+    /// `Authorization: Basic …` (client_secret_basic).
+    #[default]
+    Basic,
+    /// `client_id` and `client_secret` form fields (client_secret_post).
+    Body,
+}
+
+impl OAuth2ClientAuth {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// OAuth 2.0 settings. Every text field takes `{{variables}}`, so token URLs
+/// and client ids can differ per environment and secrets stay out of git.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2 {
+    #[serde(default)]
+    pub grant: OAuth2Grant,
+    /// Authorization endpoint (authorization code).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub auth_url: String,
+    /// Device authorization endpoint (device code).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device_auth_url: String,
+    #[serde(default)]
+    pub token_url: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_secret: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+    /// Loopback redirect for the authorization code grant, e.g.
+    /// `http://127.0.0.1:7777/callback`. Empty: a random free port.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub redirect_uri: String,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub pkce: bool,
+    /// Password grant.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub username: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+    #[serde(default, skip_serializing_if = "OAuth2ClientAuth::is_default")]
+    pub client_auth: OAuth2ClientAuth,
+    /// Extra parameters for the authorization and token requests
+    /// (`audience`, `resource`, …).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_params: Vec<KeyValue>,
+    /// Scheme in the Authorization header; `Bearer` when empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub header_prefix: String,
+}
+
+impl OAuth2 {
+    pub fn new(grant: OAuth2Grant) -> Self {
+        Self {
+            grant,
+            auth_url: String::new(),
+            device_auth_url: String::new(),
+            token_url: String::new(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            scope: String::new(),
+            redirect_uri: String::new(),
+            pkce: true,
+            username: String::new(),
+            password: String::new(),
+            client_auth: OAuth2ClientAuth::Basic,
+            extra_params: Vec::new(),
+            header_prefix: String::new(),
+        }
+    }
+}
+
+/// An access token, cached in `.trax/state.json` (never committed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthToken {
+    pub access_token: String,
+    #[serde(default)]
+    pub token_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_token: Option<String>,
+    pub obtained_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Auth {
@@ -203,6 +320,10 @@ pub struct RequestSettings {
     pub follow_redirects: bool,
     #[serde(default = "default_true")]
     pub verify_tls: bool,
+    /// Send cookies from the workspace cookie jar and store the ones the
+    /// response sets.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub cookies: bool,
 }
 
 impl Default for RequestSettings {
@@ -211,6 +332,7 @@ impl Default for RequestSettings {
             timeout_ms: None,
             follow_redirects: true,
             verify_tls: true,
+            cookies: true,
         }
     }
 }
@@ -316,6 +438,10 @@ pub struct Environment {
     pub protected: bool,
     #[serde(default)]
     pub variables: Vec<Variable>,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 fn is_false(v: &bool) -> bool {

@@ -374,3 +374,121 @@
   color: var(--danger);
   box-shadow: 0 0 0 2px var(--danger-soft);
 }
+
+/* Hover card for {{variables}} in CodeMirror (see cmVariables.ts). */
+.cm-tooltip.cm-tooltip-hover {
+  border: 0 !important;
+  background: transparent !important;
+}
+.cm-var-card {
+  max-width: 360px;
+  min-width: 200px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: var(--elev);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-sans);
+}
+.cm-var-card-name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--var);
+}
+.cm-var-card-value {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+.cm-var-card-missing {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--warn);
+}
+.cm-var-card-meta {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.cm-tooltip-autocomplete > ul > li {
+  font-family: var(--font-mono);
+  padding: 3px 8px !important;
+}
+.cm-completionDetail {
+  margin-left: 12px;
+  font-style: normal !important;
+  color: var(--faint);
+}
+
+/* CodeMirror search panel (Ctrl+F in editors and responses). */
+.cm-panels {
+  background: var(--panel) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+  font-family: var(--font-sans);
+}
+.cm-panels-bottom {
+  border-top: 1px solid var(--border) !important;
+}
+.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px !important;
+  font-size: 12.5px;
+}
+.cm-search br {
+  display: none;
+}
+.cm-search .cm-textfield {
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0 8px;
+  font: inherit;
+  font-family: var(--font-mono);
+  outline: none;
+}
+.cm-search .cm-textfield:focus {
+  border-color: var(--accent-line);
+}
+.cm-search .cm-button {
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: transparent !important;
+  background-image: none !important;
+  color: var(--text-2);
+  padding: 0 10px;
+  font: inherit;
+  text-transform: capitalize;
+}
+.cm-search .cm-button:hover {
+  background: var(--hover) !important;
+}
+.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+.cm-search button[name="close"] {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 16px;
+  background: transparent;
+  border: 0;
+}
+.cm-searchMatch {
+  background: rgba(240, 180, 92, 0.25) !important;
+  outline: 1px solid rgba(240, 180, 92, 0.5);
+}
+.cm-searchMatch-selected {
+  background: rgba(240, 180, 92, 0.55) !important;
+}

@@ -3,7 +3,8 @@
 //!
 //! Postman's `{{variables}}` and most of its `pm.*` script API work as-is, so
 //! collections keep running after import. Things without an equivalent here
-//! (OAuth 2.0 auth, file bodies, example responses) are reported as warnings.
+//! (file bodies, example responses, the OAuth 2.0 implicit grant) are
+//! reported as warnings.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -122,12 +123,89 @@ fn auth(v: &Value, warnings: &mut Vec<String>, owner: &str) -> Auth {
                 ApiKeyLocation::Header
             },
         },
+        "oauth2" => Auth::OAuth2(Box::new(oauth2(params, warnings, owner))),
         other => {
             warnings.push(format!(
                 "{owner}: {other} auth isn't supported yet, so it inherits auth instead."
             ));
             Auth::Inherit
         }
+    }
+}
+
+/// Postman's OAuth 2.0 settings. Its stored tokens aren't imported: the
+/// first send (or "Get new access token") gets a fresh one.
+fn oauth2(params: &Value, warnings: &mut Vec<String>, owner: &str) -> OAuth2 {
+    let p = |k: &str| auth_param(params, k);
+    let grant_type = p("grant_type");
+    let mut cfg = OAuth2::new(match grant_type.as_str() {
+        "client_credentials" => OAuth2Grant::ClientCredentials,
+        "password_credentials" => OAuth2Grant::Password,
+        _ => OAuth2Grant::AuthorizationCode,
+    });
+    cfg.pkce = grant_type == "authorization_code_with_pkce";
+    if grant_type == "implicit" {
+        cfg.pkce = true;
+        warnings.push(format!(
+            "{owner}: the OAuth 2.0 implicit grant isn't supported; it now uses the authorization \
+             code grant with PKCE, which the provider may need to allow."
+        ));
+    }
+    cfg.auth_url = p("authUrl");
+    cfg.token_url = p("accessTokenUrl");
+    cfg.client_id = p("clientId");
+    cfg.client_secret = p("clientSecret");
+    cfg.scope = p("scope");
+    cfg.username = p("username");
+    cfg.password = p("password");
+    if p("client_authentication") == "body" {
+        cfg.client_auth = OAuth2ClientAuth::Body;
+    }
+    let prefix = p("headerPrefix");
+    if !prefix.is_empty() && prefix != "Bearer" {
+        cfg.header_prefix = prefix;
+    }
+    let redirect = p("redirect_uri");
+    let loopback = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
+        .iter()
+        .any(|l| redirect.starts_with(l));
+    if loopback {
+        cfg.redirect_uri = redirect;
+    } else if !redirect.is_empty() && cfg.grant == OAuth2Grant::AuthorizationCode {
+        warnings.push(format!(
+            "{owner}: OAuth 2.0 redirects to {redirect}; Courion signs in through a local \
+             address, so register one like http://127.0.0.1:7777/callback with the provider."
+        ));
+    }
+    for list in ["authRequestParams", "tokenRequestParams"] {
+        if let Value::Array(items) = &params_value(params, list) {
+            for i in items {
+                let key = s(&i["key"]);
+                if !key.is_empty() && !cfg.extra_params.iter().any(|kv| kv.key == key) {
+                    let mut kv = KeyValue::new(key, text(&i["value"]));
+                    kv.enabled = i["enabled"].as_bool().unwrap_or(true);
+                    cfg.extra_params.push(kv);
+                }
+            }
+        }
+    }
+    let audience = p("audience");
+    if !audience.is_empty() && !cfg.extra_params.iter().any(|kv| kv.key == "audience") {
+        cfg.extra_params.push(KeyValue::new("audience", audience));
+    }
+    cfg
+}
+
+/// A non-string auth parameter (lists of extra parameters).
+fn params_value(params: &Value, key: &str) -> Value {
+    match params {
+        Value::Array(items) => items
+            .iter()
+            .find(|i| s(&i["key"]) == key)
+            .map(|i| i["value"].clone())
+            .unwrap_or(Value::Null),
+        Value::Object(o) => o.get(key).cloned().unwrap_or(Value::Null),
+        _ => Value::Null,
     }
 }
 
@@ -470,7 +548,14 @@ mod tests {
                     "name": "Upload",
                     "request": {
                         "method": "POST",
-                        "auth": { "type": "oauth2", "oauth2": [] },
+                        "auth": { "type": "oauth2", "oauth2": [
+                            { "key": "grant_type", "value": "client_credentials" },
+                            { "key": "accessTokenUrl", "value": "{{idp}}/token" },
+                            { "key": "clientId", "value": "{{clientId}}" },
+                            { "key": "clientSecret", "value": "{{clientSecret}}" },
+                            { "key": "client_authentication", "value": "body" },
+                            { "key": "tokenRequestParams", "value": [{ "key": "audience", "value": "uploads", "enabled": true }] }
+                        ] },
                         "body": { "mode": "formdata", "formdata": [
                             { "key": "note", "value": "hi", "type": "text" },
                             { "key": "file", "src": ["/tmp/a.png"], "type": "file" }
@@ -499,7 +584,7 @@ mod tests {
         let summary = ws.import_json(&collection.to_string()).unwrap();
         assert_eq!(summary.requests, 5);
         assert_eq!(summary.collections.len(), 1);
-        assert_eq!(summary.warnings.len(), 2, "{:?}", summary.warnings);
+        assert_eq!(summary.warnings.len(), 1, "{:?}", summary.warnings);
 
         let tree = ws.tree().unwrap();
         let c = &tree.collections[0];
@@ -548,7 +633,15 @@ mod tests {
 
         let upload = find("Upload");
         assert_eq!(upload.url, "https://api.example.com/upload");
-        assert_eq!(upload.auth, Auth::Inherit);
+        match &upload.auth {
+            Auth::OAuth2(o) => {
+                assert_eq!(o.grant, OAuth2Grant::ClientCredentials);
+                assert_eq!(o.token_url, "{{idp}}/token");
+                assert_eq!(o.client_auth, OAuth2ClientAuth::Body);
+                assert_eq!(o.extra_params[0].key, "audience");
+            }
+            other => panic!("{other:?}"),
+        }
         match upload.body {
             Body::Multipart { fields } => {
                 assert!(fields[1].is_file);

@@ -9,6 +9,10 @@ import { tags as t } from "@lezer/highlight";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { forwardRef, useMemo } from "react";
 
+import type { VarScope } from "@/lib/variables";
+
+import { variableExtensions } from "./cmVariables";
+
 export type CodeLanguage = "json" | "javascript" | "xml" | "text";
 
 // Colours are CSS variables, so one theme serves dark and light.
@@ -45,10 +49,12 @@ interface Props {
   wrap?: boolean;
   className?: string;
   minHeight?: string;
+  /** Highlight, complete and explain `{{variables}}` from this scope. */
+  variables?: VarScope | null;
 }
 
 export const CodeEditor = forwardRef<ReactCodeMirrorRef, Props>(function CodeEditor(
-  { value, onChange, language = "text", readOnly, placeholder, lineNumbers = true, wrap = false, className, minHeight },
+  { value, onChange, language = "text", readOnly, placeholder, lineNumbers = true, wrap = false, className, minHeight, variables },
   ref,
 ) {
   const extensions = useMemo(() => {
@@ -57,8 +63,9 @@ export const CodeEditor = forwardRef<ReactCodeMirrorRef, Props>(function CodeEdi
     if (language === "javascript") ext.push(javascript());
     if (language === "xml") ext.push(xml());
     if (wrap) ext.push(EditorView.lineWrapping);
+    if (variables) ext.push(...variableExtensions(variables));
     return ext;
-  }, [language, wrap]);
+  }, [language, wrap, variables]);
 
   return (
     <CodeMirror

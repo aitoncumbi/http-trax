@@ -38,9 +38,56 @@ export type Auth =
   | { type: "none" }
   | { type: "bearer"; token: string }
   | { type: "basic"; username: string; password: string }
-  | { type: "api-key"; key: string; value: string; location: "header" | "query" };
+  | { type: "api-key"; key: string; value: string; location: "header" | "query" }
+  | ({ type: "oauth2" } & OAuth2);
 
 export type AuthType = Auth["type"];
+
+export type OAuth2Grant = "client-credentials" | "authorization-code" | "device-code" | "password";
+
+/** OAuth 2.0 settings; text fields take {{variables}}. */
+export interface OAuth2 {
+  grant: OAuth2Grant;
+  authUrl?: string;
+  deviceAuthUrl?: string;
+  tokenUrl: string;
+  clientId: string;
+  clientSecret?: string;
+  scope?: string;
+  /** Loopback redirect; empty means a random port on 127.0.0.1. */
+  redirectUri?: string;
+  /** Default true. */
+  pkce?: boolean;
+  username?: string;
+  password?: string;
+  clientAuth?: "basic" | "body";
+  extraParams?: KeyValue[];
+  /** Default "Bearer". */
+  headerPrefix?: string;
+}
+
+export interface OAuthToken {
+  accessToken: string;
+  tokenType: string;
+  refreshToken?: string | null;
+  expiresAt?: string | null;
+  scope?: string | null;
+  idToken?: string | null;
+  obtainedAt: string;
+}
+
+export interface OAuthTokenStatus {
+  token: OAuthToken | null;
+  /** Valid for at least another 30 seconds. */
+  fresh: boolean;
+  /** Authorization code and device code need the user to sign in. */
+  needsUser: boolean;
+}
+
+/** What the user has to do while a token is being fetched. */
+export type OAuthPrompt =
+  | { kind: "browser"; url: string }
+  | { kind: "device"; userCode: string; verificationUri: string; verificationUriComplete?: string | null; expiresIn: number };
 
 export interface Scripts {
   preRequest?: string;
@@ -51,6 +98,30 @@ export interface RequestSettings {
   timeoutMs?: number;
   followRedirects: boolean;
   verifyTls: boolean;
+  /** Use the workspace cookie jar (default true). */
+  cookies?: boolean;
+}
+
+/** A cookie in the workspace jar (`.trax/cookies.json`, never committed). */
+export interface CookieInfo {
+  name: string;
+  value: string;
+  /** Host, without a leading dot. */
+  domain: string;
+  /** Also sent to subdomains. */
+  includeSubdomains: boolean;
+  path: string;
+  /** RFC 3339; absent for a session cookie. */
+  expires?: string | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite?: string | null;
+}
+
+export interface CookieKey {
+  domain: string;
+  path: string;
+  name: string;
 }
 
 export interface Request {
@@ -485,5 +556,29 @@ export interface ImportSummary {
   collections: string[];
   environments: string[];
   requests: number;
+  warnings: string[];
+}
+
+// ------------------------------------------------------------- export
+
+export interface ExportPart {
+  name: string;
+  value: string;
+  isFile: boolean;
+}
+
+export type ExportBody =
+  | { kind: "none" }
+  | { kind: "text"; text: string }
+  | { kind: "form"; fields: [string, string][] }
+  | { kind: "multipart"; parts: ExportPart[] };
+
+/** A request as it would be sent (see `export_request`). */
+export interface ExportRequest {
+  method: string;
+  url: string;
+  headers: { key: string; value: string }[];
+  body: ExportBody;
+  basicAuth?: { username: string; password: string } | null;
   warnings: string[];
 }

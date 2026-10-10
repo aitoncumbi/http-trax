@@ -94,6 +94,8 @@ Decisions:
 | Values of environment variables marked **secret** | `.trax/state.json` | no |
 | Environment "current values" set by scripts (`trax.env.set`) or edited locally | `.trax/state.json` | no |
 | Runtime variables (`trax.vars.set`) | `.trax/state.json` | no |
+| Cookies stored from responses | `.trax/cookies.json` | no |
+| OAuth 2.0 access and refresh tokens | `.trax/state.json` | no |
 | Bookmarked collections, scoped collection, active environment, sync settings | `registry.json` in the user config dir | no |
 
 This mirrors Postman's *initial value* / *current value* split. A login script that stores a fresh token should not create a git change for everyone on every run, and secrets must never be committed by accident. Bookmarks and the "scope to this collection" view are personal preferences, so they are per user rather than per repository.
@@ -119,14 +121,37 @@ The runner (`trax-core/src/runner.rs`) follows Postman's order so existing habit
 1. Merge headers: collection → folders → request (later levels override by name).
 2. Run pre-request scripts in the same order. Scripts see `{{placeholders}}` intact and can change the method, URL, headers and body, set variables, or call `trax.skipRequest()`.
 3. Resolve variables.
-4. Apply auth (bearer, basic, API key in header or query). The closest non-`inherit` auth wins, and an explicit `Authorization` header always wins.
-5. Send with `reqwest` (rustls with the OS certificate store; HTTP/2; gzip/brotli/deflate; per-request timeout, redirect and TLS-verification settings).
+4. Apply auth (bearer, basic, API key in header or query, OAuth 2.0). The closest non-`inherit` auth wins, and an explicit `Authorization` header always wins. An OAuth 2.0 token is only fetched once the pre-request scripts have passed, right before sending.
+5. Send with `reqwest` (rustls with the OS certificate store; HTTP/2; gzip/brotli/deflate; per-request timeout, redirect and TLS-verification settings). Cookies come from the workspace cookie jar (below).
 6. Run post-response scripts (collection → folders → request) and collect tests and logs.
 7. Persist variable changes to local state.
 
 A failing pre-request script stops the request from being sent. Errors are values, not exceptions: a `RunResult` always comes back, carrying the transport error, script errors, tests and logs, so the UI and agents can show exactly what happened.
 
 Collection runs execute requests depth-first in display order and share one variable session, so a login request can feed a token to every request after it.
+
+### OAuth 2.0
+
+`auth: {type: oauth2}` (`trax_core::oauth`) supports four grants. Every field takes `{{variables}}`, so token URLs and client ids can differ per environment and a client secret can live in a secret variable.
+
+| Grant | Who gets the token |
+| --- | --- |
+| Client credentials, password | The runner, by itself, whenever there is no valid token |
+| Authorization code (PKCE S256 by default) | The user once, from the Authorization tab: the browser opens the provider's page and the redirect comes back to a loopback listener (`http://127.0.0.1:<free port>/callback`, or a fixed loopback URI registered with the provider, as RFC 8252 recommends for native apps). The `state` parameter is checked. |
+| Device code (RFC 8628) | The user once: the app shows the code and the verification page, and polls (honouring `slow_down`) |
+
+Before each send the runner uses the cached token while it has more than 30 seconds left, else refreshes it when there is a refresh token (keeping the old refresh token when the server doesn't rotate it), else fetches a new one for the unattended grants. For the sign-in grants it stops with a message pointing to the Authorization tab rather than sending an unauthenticated request. Token errors are reported with the provider's `error` and `error_description`.
+
+Tokens are kept in `.trax/state.json` (never committed), keyed by grant, token URL, client id, scope and user. Two environments with different token URLs or clients therefore get their own token, and a token is reused by every request that shares the same settings (typically set once on the collection). Client credentials go in a Basic header by default (client_secret_basic) or in the body; extra parameters (`audience`, `resource`) are sent with the authorization and token requests. Agents use OAuth 2.0 like the app, cached tokens are masked in their output, and a sign-in grant without a token tells them to ask the user to sign in.
+
+### Cookie jar
+
+Each workspace has a cookie jar (`trax_core::cookies`), so a login request that sets a session cookie works for every request after it, like in a browser. The jar is a `reqwest` cookie provider, which means cookies set on a redirect (the usual `POST /login` → `302` → `GET /home`) are stored and sent on the next hop too. Matching follows RFC 6265 (domain, path, `Secure`, expiry) via the `cookie_store` crate.
+
+- Stored in `.trax/cookies.json` as a readable list (name, value, domain, path, expiry, flags). Session cookies are kept until cleared, as in Postman. Never committed.
+- A request that sets its own `Cookie` header bypasses the jar, as an explicit `Authorization` header bypasses auth. Settings → "Use the cookie jar" turns it off per request (`settings.cookies: false` in the YAML, written only when off).
+- The cookies sent are listed in the sent request, and the response's Cookies tab shows what it set. "Copy as cURL" with variables filled in includes them.
+- The app and `trax-mcp` each keep the jar in memory and reload it when the file's modification time changes, so cookies from an agent's login are seen by the app and the other way round.
 
 ## Scripting
 
@@ -168,7 +193,7 @@ If a file changes on disk while its tab has unsaved edits, the tab is not overwr
 
 `trax-mcp` speaks MCP over stdio (newline-delimited JSON-RPC 2.0) and negotiates protocol versions `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05`. It is implemented directly rather than with an SDK because the surface is small (initialize, ping, tools/list, tools/call) and the SDKs' APIs were still moving quickly.
 
-Tools: `list_workspaces`, `init_workspace`, `get_workspace`, `get_request`, `upsert_collection`, `upsert_request`, `delete_request`, `run_request`, `run_collection`, `send_http_request`, `list_environments`, `upsert_environment`, `list_saved_responses`.
+Tools: `list_workspaces`, `init_workspace`, `get_workspace`, `get_request`, `upsert_collection`, `upsert_request`, `delete_request`, `run_request`, `run_collection`, `send_http_request`, `list_environments`, `upsert_environment`, `list_saved_responses`, `list_cookies`, `clear_cookies`. Auth objects accept every type the app has, OAuth 2.0 included.
 
 Decisions:
 
@@ -178,7 +203,7 @@ Decisions:
 - **Model-friendly outputs.** Each result has a compact text rendering (status, timing, test results with failure messages, console, pretty-printed and truncated body) plus `structuredContent` with the full JSON. Collection runs append details only for failing requests, so the agent can fix the service without another round-trip.
 - **Tool calls are serialised.** Clients may call tools in parallel; files and the registry are read-modify-write, so tool calls run one at a time (pings stay responsive).
 - **Shipped with the app.** `scripts/build-sidecar.mjs` builds `trax-mcp` and Tauri bundles it (`externalBin`) next to the main executable. The AI agents view in the app shows ready-to-paste configs for Claude Code, Claude Desktop/Cursor/Windsurf and VS Code using the installed path.
-- **The user decides what agents may do.** Five permissions live in the registry (`agentPermissions`) and `trax-mcp` reads them on every tool call, so a change in the app applies immediately: create and edit requests, run requests, read responses (status and test results are always returned), edit environments, read secret values. Editing environments and reading secrets are off by default; agents put base URLs in collection variables instead. With secrets off, the values of secret variables are masked anywhere in a tool's output, including echoed request headers. A refused call names the setting to ask the user about.
+- **The user decides what agents may do.** Five permissions live in the registry (`agentPermissions`) and `trax-mcp` reads them on every tool call, so a change in the app applies immediately: create and edit requests, run requests, read responses (status and test results are always returned), edit environments, read secret values. Editing environments and reading secrets are off by default; agents put base URLs in collection variables instead. With secrets off, the values of secret variables, of cookies in the jar and of cached OAuth 2.0 tokens are masked anywhere in a tool's output, including echoed request headers. A refused call names the setting to ask the user about.
 - **Protected environments** are never used by agents: a run whose environment is protected fails with a message telling the agent to pick another environment or ask the user.
 - **Who is connected, and what they did.** Each `trax-mcp` process writes `agents/<pid>.json` in the registry directory after `initialize` (client name from `clientInfo`) and refreshes it every 30 seconds; the app treats sessions seen in the last 90 seconds as connected and also checks the clients' config files to show "Set up". Creating, editing, deleting and running are appended to `.trax/agent-activity.json` in the workspace (local, last 200 entries), which the agents view lists.
 
@@ -193,12 +218,12 @@ The interface follows the "Courion" design (dark first, quiet chrome, one indigo
   - AI agents: MCP clients and their state in the sidebar; setup snippets, server details, permissions and recent agent activity in the card.
   - Source control: changed files and the commit box in the sidebar; the selected change and history in the card.
   - Settings: section index in the sidebar, the settings page in the card.
-- **Requests** show a breadcrumb, the URL bar (method, URL with highlighted `{{variables}}`, Send, Save), request sections (Query params, Body, Headers, Authorization, Scripts, Settings, Docs) and the response (Body, Headers, Tests, Console, Request, Saved). The response sits below or beside the request; the choice is remembered. HTML responses get a Preview, rendered in a sandboxed iframe with a CSP that blocks scripts and every outside request.
+- **Requests** show a breadcrumb, the URL bar (method, URL with highlighted `{{variables}}`, Send, Save, and a menu for code snippets, copy as cURL and cookies), request sections (Query params, Body, Headers, Authorization, Scripts, Settings, Docs) and the response (Body, Headers, Cookies, Tests, Console, Request, Saved). The response sits below or beside the request; the choice is remembered. HTML responses get a Preview, rendered in a sandboxed iframe with a CSP that blocks scripts and every outside request.
 - **Environments** carry two switches. *Sync with Git* moves the file between `environments/` (committed) and `.trax/environments/` (this machine only). *Protected* asks for confirmation before anything is sent with it and keeps agents away from it. The variables table shows, per variable, whether its value is synced, local only, or never synced (secrets).
 - **Readable diffs.** For workspace files Source control shows semantic changes by default ("URL changed", "Header added", "Body updated · currency", "Test added", "Variable updated"), computed by `trax_core::diff::semantic_diff` from the before and after YAML. Secrets show as "secret · not synced". Raw shows the line diff with old and new line numbers. Files that aren't workspace YAML, and conflicted files, show the line diff only.
 - **History** lists recent runs (from the app and from agents through MCP) grouped by day. It is local to the machine (`.trax/history.json`, last 300 runs) and never committed.
 - **Command palette** (Ctrl/Cmd+K) searches requests by name, URL and path, lists recent runs, and runs commands. Ctrl/Cmd+. on a request opens its actions (open, open and send, copy URL).
-- **Import** takes a cURL command, or a Postman collection (v2.0/v2.1) or environment export (`trax_core::import`). Postman's `pm.*` scripts keep working; what has no equivalent (OAuth 2.0, file bodies, example responses) is listed after the import.
+- **Import** takes a cURL command, or a Postman collection (v2.0/v2.1) or environment export (`trax_core::import`). Postman's `pm.*` scripts keep working, and OAuth 2.0 settings are carried over (not the tokens). What has no equivalent (example responses, the implicit grant, a non-local redirect URI) is listed after the import.
 - **Bookmarks** pin collections to a "Pinned" section at the top of the tree, in the order they were pinned. **Scope** shows only one collection and hides the others until "Show all". Both are per-user, per-workspace preferences stored in the registry.
 - **State:** a Zustand store (`src/lib/store.ts`) plus small ones for Source control and the agents view, whose sidebar and card halves share state. Tabs are kept per workspace, so switching teams and back restores your tabs. Dirty state is a comparison of the draft with the last saved snapshot.
 - **Theme:** design tokens as CSS variables (`src/app/globals.css`) mapped into Tailwind v4's theme; dark by default, light derived from the same tokens. Inter for the interface and JetBrains Mono for code, bundled with the app (no font requests at runtime). CodeMirror 6 for editors, with a highlight style that uses the same tokens.
@@ -209,7 +234,8 @@ The interface follows the "Courion" design (dark first, quiet chrome, one indigo
 
 - Scripts have no I/O. They can only shape the request and read the response.
 - AI agents get only what the user allows (see MCP server). Secret values are masked in their output unless the user turns that on, and they never run requests against a protected environment.
-- Secret variables never reach the shared files. They are stored in `.trax/state.json`, which `init` adds to `.gitignore`. OS-keychain storage is on the roadmap.
+- Secret variables, OAuth 2.0 tokens and cookies never reach the shared files. They are stored under `.trax/`, which `init` adds to `.gitignore`. OS-keychain storage is on the roadmap.
+- The OAuth 2.0 loopback listener binds to 127.0.0.1 only, lives for one sign-in (at most five minutes), and accepts a code only with the `state` it sent.
 - TLS verification is on by default and can be disabled per request only.
 - The webview CSP is currently disabled (`"csp": null`) while the static export's inline bootstrap scripts are verified against Tauri's CSP hash injection. HTML responses are previewed inside an iframe with an empty `sandbox` (no scripts, no same-origin access, no navigation of the app) and a CSP that blocks every outside request; images are shown from `data:` URLs. Tightening the CSP is on the roadmap.
 - No telemetry and no network traffic except the requests you send and the git remotes you configure.

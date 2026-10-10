@@ -345,6 +345,8 @@ function RequestRow({ request, depth }: { request: RequestSummary; depth: number
   const ctx = useContextMenu(() => [
     { label: "Open", onSelect: () => void openRequest(request.id) },
     { label: "Duplicate", icon: <Copy size={14} />, onSelect: () => void duplicateRequest(request.id) },
+    { label: "Copy as cURL", onSelect: () => void useStore.getState().copyAsCurl({ requestId: request.id }) },
+    { label: "Code snippet…", onSelect: () => void useStore.getState().showCodeDialog({ requestId: request.id }) },
     { label: "", separator: true },
     { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void deleteRequest(request.id) },
   ]);

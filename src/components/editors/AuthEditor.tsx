@@ -2,8 +2,9 @@
 
 import { ChevronDown } from "lucide-react";
 
-import type { Auth, AuthType } from "@/lib/types";
+import type { Auth, AuthType, Request } from "@/lib/types";
 
+import { GRANTS, OAuth2Fields, OAuthTokenPanel } from "./OAuthEditor";
 import { VarInput } from "./VarInput";
 
 const TYPES: { id: AuthType; label: string }[] = [
@@ -12,6 +13,7 @@ const TYPES: { id: AuthType; label: string }[] = [
   { id: "bearer", label: "Bearer token" },
   { id: "basic", label: "Basic auth" },
   { id: "api-key", label: "API key" },
+  { id: "oauth2", label: "OAuth 2.0" },
 ];
 
 function make(type: AuthType): Auth {
@@ -25,6 +27,8 @@ function make(type: AuthType): Auth {
       return { type, username: "", password: "" };
     case "api-key":
       return { type, key: "X-Api-Key", value: "", location: "header" };
+    case "oauth2":
+      return { type, grant: "authorization-code", authUrl: "", tokenUrl: "", clientId: "", scope: "" };
   }
 }
 
@@ -36,6 +40,8 @@ function describe(auth: Auth): string {
       return `basic auth as ${auth.username || "…"}`;
     case "api-key":
       return `the API key ${auth.key} in the ${auth.location}`;
+    case "oauth2":
+      return `OAuth 2.0 (${GRANTS.find((g) => g.id === auth.grant)?.short ?? auth.grant})`;
     default:
       return "no auth";
   }
@@ -49,6 +55,7 @@ export function AuthEditor({
   inherited,
   allowInherit = true,
   environment,
+  oauthTarget,
 }: {
   auth: Auth;
   onChange: (a: Auth) => void;
@@ -57,6 +64,8 @@ export function AuthEditor({
   allowInherit?: boolean;
   /** Active environment name, for the "resolved from" hint. */
   environment?: string | null;
+  /** What to get OAuth 2.0 tokens for: the request, or a stand-in for a collection or folder. */
+  oauthTarget?: { request: Request; parentId: string | null } | null;
 }) {
   const types = allowInherit ? TYPES : TYPES.filter((t) => t.id !== "inherit");
   const usesVars = JSON.stringify(auth).includes("{{");
@@ -156,6 +165,10 @@ export function AuthEditor({
             </select>
           </div>
         </div>
+      )}
+      {auth.type === "oauth2" && <OAuth2Fields value={auth} onChange={(o) => onChange({ ...o, type: "oauth2" })} />}
+      {oauthTarget && (auth.type === "oauth2" || (auth.type === "inherit" && inherited?.auth.type === "oauth2")) && (
+        <OAuthTokenPanel target={oauthTarget} configKey={JSON.stringify(auth.type === "oauth2" ? auth : inherited?.auth)} />
       )}
       {auth.type !== "inherit" && auth.type !== "none" && (
         <p className="-mt-2 text-[12.5px] text-faint">

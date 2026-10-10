@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 use trax_core::{
-    run_draft, run_group, run_saved, save_run_response, ActivityKind, AgentPermissions,
+    run_draft, run_group, run_saved, save_run_response, ActivityKind, AgentPermissions, CookieJar,
     Environment, GroupMeta, GroupNode, Registry, Request, RunOptions, RunResult, TreeItem,
     Workspace,
 };
@@ -130,7 +130,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "description": { "type": "string" },
                     "variables": { "type": "object", "description": "Collection variables, e.g. {\"apiVersion\": \"v1\"}." },
                     "headers": { "type": "object", "description": "Headers added to every request, e.g. {\"Accept\": \"application/json\"}." },
-                    "auth": { "type": "object", "description": "{\"type\": \"bearer\", \"token\": \"{{token}}\"} | {\"type\": \"basic\", \"username\", \"password\"} | {\"type\": \"api-key\", \"key\", \"value\", \"location\": \"header\"|\"query\"} | {\"type\": \"none\"}" },
+                    "auth": { "type": "object", "description": "{\"type\": \"bearer\", \"token\": \"{{token}}\"} | {\"type\": \"basic\", \"username\", \"password\"} | {\"type\": \"api-key\", \"key\", \"value\", \"location\": \"header\"|\"query\"} | {\"type\": \"oauth2\", \"grant\": \"client-credentials\"|\"password\"|\"authorization-code\"|\"device-code\", \"tokenUrl\", \"clientId\", \"clientSecret\": \"{{clientSecret}}\", \"scope\", \"authUrl\", \"deviceAuthUrl\", \"extraParams\": [{\"key\": \"audience\", \"value\": \"...\"}]} (tokens are fetched, cached and refreshed automatically; authorization-code and device-code need the user to sign in once in the app) | {\"type\": \"none\"}" },
                     "scripts": { "type": "object", "description": format!("{{\"preRequest\": \"...\", \"postResponse\": \"...\"}} run around every request. {SCRIPT_HELP}") }
                 },
                 "required": ["name"]
@@ -271,6 +271,32 @@ pub fn tool_definitions() -> Vec<Value> {
             },
             "annotations": read_only,
         }),
+        json!({
+            "name": "list_cookies",
+            "title": "List cookies",
+            "description": "List the workspace cookie jar: cookies stored from responses and sent with later requests to matching URLs (values are masked unless the user lets agents read secrets).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "domain": { "type": "string", "description": "Only this domain and its subdomains." }
+                }
+            },
+            "annotations": read_only,
+        }),
+        json!({
+            "name": "clear_cookies",
+            "title": "Clear cookies",
+            "description": "Remove cookies from the workspace cookie jar (all, or one domain's), e.g. to test a flow as a signed-out user.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "domain": { "type": "string", "description": "Only this domain and its subdomains. Omit to clear every cookie." }
+                }
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
+        }),
     ]
 }
 
@@ -296,6 +322,8 @@ pub async fn call(server: &Server, name: &str, args: &Value) -> Result<ToolOutpu
         "list_environments" => list_environments(server, args, &perms),
         "upsert_environment" => upsert_environment(server, args),
         "list_saved_responses" => list_saved_responses(server, args, &perms),
+        "list_cookies" => list_cookies(server, args),
+        "clear_cookies" => clear_cookies(server, args),
         other => Err(format!("unknown tool `{other}`")),
     }?;
     if !perms.read_secrets {
@@ -316,7 +344,7 @@ fn check_allowed(tool: &str, perms: &AgentPermissions) -> Result<(), String> {
         "init_workspace" | "upsert_collection" | "upsert_request" | "delete_request" => {
             (perms.edit_requests, "Create and edit requests")
         }
-        "run_request" | "run_collection" | "send_http_request" => {
+        "run_request" | "run_collection" | "send_http_request" | "clear_cookies" => {
             (perms.run_requests, "Run requests and tests")
         }
         "upsert_environment" => (perms.edit_environments, "Edit environments"),
@@ -355,15 +383,26 @@ fn check_not_protected(server: &Server, args: &Value) -> Result<(), String> {
     }
 }
 
-/// Values of secret variables in any environment, longest first.
+/// Values of secret variables in any environment, of cookies in the jar and
+/// of cached OAuth 2.0 tokens (all credentials), longest first.
 fn secret_values(ws: &Workspace) -> Vec<String> {
     let mut out: Vec<String> = ws
         .environments()
         .unwrap_or_default()
         .into_iter()
         .flat_map(|v| v.environment.variables)
-        .filter(|v| v.secret && v.value.chars().count() >= 4)
+        .filter(|v| v.secret)
         .map(|v| v.value)
+        .chain(CookieJar::of(ws).list().into_iter().map(|c| c.value))
+        .chain(
+            ws.local_state()
+                .map(|s| s.oauth_tokens)
+                .unwrap_or_default()
+                .into_values()
+                .flat_map(|t| [Some(t.access_token), t.refresh_token, t.id_token])
+                .flatten(),
+        )
+        .filter(|v| v.chars().count() >= 4)
         .collect();
     out.sort_by_key(|v| std::cmp::Reverse(v.len()));
     out.dedup();
@@ -1276,4 +1315,63 @@ fn list_saved_responses(
         ));
     }
     Ok(ToolOutput::with(text, json!({ "responses": saved })))
+}
+
+fn list_cookies(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let domain = opt_str(args, "domain").map(|d| d.trim().trim_start_matches('.').to_lowercase());
+    let cookies: Vec<_> = CookieJar::of(&ws)
+        .list()
+        .into_iter()
+        .filter(|c| match &domain {
+            Some(d) => c.domain == *d || c.domain.ends_with(&format!(".{d}")),
+            None => true,
+        })
+        .collect();
+    if cookies.is_empty() {
+        return Ok(ToolOutput::with(
+            "The cookie jar is empty.",
+            json!({ "cookies": [] }),
+        ));
+    }
+    let mut text = String::new();
+    for c in &cookies {
+        let mut flags = Vec::new();
+        if c.include_subdomains {
+            flags.push("subdomains".to_string());
+        }
+        if c.secure {
+            flags.push("secure".into());
+        }
+        if c.http_only {
+            flags.push("httpOnly".into());
+        }
+        flags.push(match &c.expires {
+            Some(e) => format!("expires {e}"),
+            None => "session".into(),
+        });
+        text.push_str(&format!(
+            "- {}{} {}={} ({})\n",
+            c.domain,
+            c.path,
+            c.name,
+            c.value,
+            flags.join(", ")
+        ));
+    }
+    Ok(ToolOutput::with(text, json!({ "cookies": cookies })))
+}
+
+fn clear_cookies(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let domain = opt_str(args, "domain");
+    let n = CookieJar::of(&ws).clear(domain).map_err(err)?;
+    let what = match domain {
+        Some(d) => format!("Removed {n} cookie(s) for {d}."),
+        None => format!("Removed {n} cookie(s)."),
+    };
+    if n > 0 {
+        server.record(&ws, ActivityKind::Deleted, what.clone());
+    }
+    Ok(ToolOutput::with(what, json!({ "removed": n })))
 }

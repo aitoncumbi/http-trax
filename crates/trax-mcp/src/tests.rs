@@ -400,3 +400,101 @@ async fn permissions_protected_environments_and_activity() {
     h.server.end_session();
     assert!(!session_file.exists());
 }
+
+#[tokio::test]
+async fn cookie_jar_tools_mask_values() {
+    let api = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(204).insert_header("set-cookie", "sid=sess_9f8e7d; Path=/"),
+        )
+        .mount(&api)
+        .await;
+    let h = Harness::new();
+    let ws_dir = h.repo.path().join("jar");
+    h.tool(
+        "init_workspace",
+        json!({ "path": ws_dir.to_string_lossy() }),
+    )
+    .await;
+
+    let (text, _, err) = h
+        .tool(
+            "send_http_request",
+            json!({ "method": "POST", "url": format!("{}/login", api.uri()) }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert!(!text.contains("sess_9f8e7d"), "{text}");
+
+    let (text, result, _) = h.tool("list_cookies", json!({})).await;
+    assert!(text.contains("sid=••••••"), "{text}");
+    assert!(!result.to_string().contains("sess_9f8e7d"));
+    h.permissions(|p| p.read_secrets = true);
+    let (text, _, _) = h
+        .tool("list_cookies", json!({ "domain": "127.0.0.1" }))
+        .await;
+    assert!(text.contains("sid=sess_9f8e7d"), "{text}");
+
+    let (text, result, err) = h.tool("clear_cookies", json!({})).await;
+    assert!(!err, "{text}");
+    assert_eq!(result["removed"], 1);
+    let (text, _, _) = h.tool("list_cookies", json!({})).await;
+    assert!(text.contains("empty"), "{text}");
+}
+
+#[tokio::test]
+async fn oauth2_client_credentials_for_agents() {
+    let idp = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "access_token": "at_live_5f1e2d3c", "token_type": "Bearer", "expires_in": 3600 }),
+        ))
+        .expect(1)
+        .mount(&idp)
+        .await;
+    let api = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/me"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer at_live_5f1e2d3c",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "name": "Ada" })))
+        .mount(&api)
+        .await;
+    let h = Harness::new();
+    let ws_dir = h.repo.path().join("oauth");
+    h.tool(
+        "init_workspace",
+        json!({ "path": ws_dir.to_string_lossy() }),
+    )
+    .await;
+    let auth = json!({
+        "type": "oauth2", "grant": "client-credentials",
+        "tokenUrl": format!("{}/token", idp.uri()), "clientId": "agent", "clientSecret": "shh"
+    });
+    for _ in 0..2 {
+        let (text, result, err) = h
+            .tool(
+                "send_http_request",
+                json!({ "url": format!("{}/me", api.uri()), "auth": auth, "include_headers": true }),
+            )
+            .await;
+        assert!(!err, "{text}");
+        assert_eq!(result["response"]["status"], 200);
+        assert!(!text.contains("at_live_5f1e2d3c"), "{text}");
+        assert!(!result.to_string().contains("at_live_5f1e2d3c"));
+    }
+
+    let interactive = json!({ "type": "oauth2", "grant": "authorization-code", "authUrl": "https://idp.test/authorize", "tokenUrl": "https://idp.test/token" });
+    let (text, _, err) = h
+        .tool(
+            "send_http_request",
+            json!({ "url": format!("{}/me", api.uri()), "auth": interactive }),
+        )
+        .await;
+    assert!(err && text.contains("no access token yet"), "{text}");
+}

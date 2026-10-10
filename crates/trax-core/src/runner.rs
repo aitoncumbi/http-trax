@@ -16,10 +16,12 @@ use std::time::Instant;
 
 use base64::Engine as _;
 
+use crate::cookies::CookieJar;
 use crate::error::{Error, Result};
 use crate::http::{self, HttpRequest, PreparedBody, PreparedPart};
 use crate::interpolate::{interpolate, unresolved};
 use crate::model::*;
+use crate::oauth;
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
@@ -43,7 +45,7 @@ impl Default for RunOptions {
 }
 
 /// Variable state for one run (or one collection run).
-struct Session {
+pub(crate) struct Session {
     workspace_vars: BTreeMap<String, String>,
     env_id: Option<String>,
     env_name: String,
@@ -56,7 +58,7 @@ struct Session {
 }
 
 impl Session {
-    fn load(ws: &Workspace, opts: &RunOptions) -> Result<Self> {
+    pub(crate) fn load(ws: &Workspace, opts: &RunOptions) -> Result<Self> {
         let manifest = ws.manifest()?;
         let workspace_vars = enabled_vars(&manifest.variables);
         let mut warning = None;
@@ -92,7 +94,10 @@ impl Session {
         })
     }
 
-    fn scope(&self, collection_vars: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    pub(crate) fn scope(
+        &self,
+        collection_vars: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
         let mut all = self.workspace_vars.clone();
         all.extend(collection_vars.clone());
         all.extend(self.env.clone());
@@ -146,7 +151,7 @@ fn apply_delta(map: &mut BTreeMap<String, String>, delta: &BTreeMap<String, Opti
     }
 }
 
-fn enabled_vars(vars: &[Variable]) -> BTreeMap<String, String> {
+pub(crate) fn enabled_vars(vars: &[Variable]) -> BTreeMap<String, String> {
     vars.iter()
         .filter(|v| v.enabled && !v.key.is_empty())
         .map(|v| (v.key.clone(), v.value.clone()))
@@ -168,19 +173,19 @@ fn to_script_headers(headers: &[Header]) -> Vec<trax_script::Header> {
         .collect()
 }
 
-fn set_header(headers: &mut Vec<Header>, key: &str, value: String) {
+pub(crate) fn set_header(headers: &mut Vec<Header>, key: &str, value: String) {
     match headers.iter_mut().find(|h| h.key.eq_ignore_ascii_case(key)) {
         Some(h) => h.value = value,
         None => headers.push(Header::new(key, value)),
     }
 }
 
-fn has_header(headers: &[Header], key: &str) -> bool {
+pub(crate) fn has_header(headers: &[Header], key: &str) -> bool {
     headers.iter().any(|h| h.key.eq_ignore_ascii_case(key))
 }
 
 /// Headers from collection → folders → request; later levels override.
-fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
+pub(crate) fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
     let mut out = Vec::new();
     let levels = ancestors
         .iter()
@@ -197,7 +202,7 @@ fn merged_headers(request: &Request, ancestors: &[GroupMeta]) -> Vec<Header> {
     out
 }
 
-fn effective_auth(request: &Request, ancestors: &[GroupMeta]) -> Auth {
+pub(crate) fn effective_auth(request: &Request, ancestors: &[GroupMeta]) -> Auth {
     if !request.auth.is_inherit() {
         return request.auth.clone();
     }
@@ -218,7 +223,7 @@ fn initial_body(body: &Body) -> Option<String> {
     }
 }
 
-fn default_content_type(body: &Body) -> Option<&str> {
+pub(crate) fn default_content_type(body: &Body) -> Option<&str> {
     match body {
         Body::Json { .. } | Body::Graphql { .. } => Some("application/json"),
         Body::Xml { .. } => Some("application/xml"),
@@ -228,7 +233,7 @@ fn default_content_type(body: &Body) -> Option<&str> {
     }
 }
 
-fn append_query(url: &mut String, pairs: &[(String, String)]) {
+pub(crate) fn append_query(url: &mut String, pairs: &[(String, String)]) {
     if pairs.is_empty() {
         return;
     }
@@ -257,7 +262,7 @@ fn append_query(url: &mut String, pairs: &[(String, String)]) {
     *url = format!("{base}{sep}{query}{fragment}");
 }
 
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
@@ -497,8 +502,13 @@ async fn execute(
         });
     }
 
-    // 4. Auth.
+    // 4. Auth. An OAuth 2.0 token is only fetched once the request is sure
+    // to be sent (below).
+    let mut oauth = None;
     match effective_auth(request, ancestors) {
+        Auth::OAuth2(cfg) if !has_header(&sent.headers, "authorization") => {
+            oauth = Some(oauth::Resolved::new(&cfg, &vars, &request.settings));
+        }
         Auth::Bearer { token } if !has_header(&sent.headers, "authorization") => {
             sent.headers.push(Header::new(
                 "Authorization",
@@ -567,16 +577,55 @@ async fn execute(
     if result.skipped {
         return result;
     }
+    if let Some(r) = &oauth {
+        match oauth::token_for_run(ws, r).await {
+            Ok(t) => {
+                if let Some(note) = t.note {
+                    result.logs.push(LogEntry {
+                        level: "info".into(),
+                        message: note,
+                        phase: "prepare".into(),
+                        source: "runner".into(),
+                    });
+                }
+                sent.headers.push(Header::new("Authorization", t.header));
+                result.request = sent.clone();
+            }
+            Err(e) => {
+                result.error = Some(e);
+                return result;
+            }
+        }
+    }
 
-    // 5. Send.
+    // 5. Send. An explicit Cookie header bypasses the jar.
+    let jar = (request.settings.cookies && !has_header(&sent.headers, "cookie"))
+        .then(|| CookieJar::of(ws));
     let http_req = HttpRequest {
         method: sent.method.clone(),
         url: sent.url.clone(),
         headers: sent.headers.clone(),
         body,
         settings: request.settings.clone(),
+        cookies: jar.clone(),
     };
-    let response = match http::send(&http_req).await {
+    if let Some(cookie) = jar.as_ref().and_then(|j| j.header_for(&sent.url)) {
+        // Shown in the sent request; the client adds it (and re-reads the
+        // jar on each redirect).
+        result.request.headers.push(Header::new("Cookie", cookie));
+    }
+    let sent_result = http::send(&http_req).await;
+    if let Some(jar) = &jar {
+        if let Err(e) = jar.save() {
+            result.logs.push(LogEntry {
+                level: "warn".into(),
+                message: format!("could not save cookies: {e}"),
+                phase: "response".into(),
+                source: "runner".into(),
+            });
+        }
+    }
+    let response = match sent_result {
         Ok(r) => r,
         Err(e) => {
             result.error = Some(e);
@@ -673,20 +722,52 @@ fn record_history(ws: &Workspace, session: &Session, runs: &[&RunResult]) {
 /// Run a request that may have unsaved edits. Inheritance comes from the
 /// saved request's location, or from `parent_id` for a new request, or
 /// nothing for an ad-hoc request.
+/// Parents of `request`: from the workspace when it is saved, otherwise the
+/// chain above `parent_id` (an unsaved draft).
+pub(crate) fn ancestors_for(
+    ws: &Workspace,
+    request: &Request,
+    parent_id: Option<&str>,
+) -> Result<Vec<GroupMeta>> {
+    match ws.request_context(&request.id) {
+        Ok(ctx) => Ok(ctx.ancestors),
+        Err(Error::NotFound(_)) => match parent_id {
+            Some(pid) => ws.group_chain(pid),
+            None => Ok(Vec::new()),
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// Variables as a run would resolve them below `ancestors`, without running
+/// scripts.
+pub(crate) fn static_scope(
+    ws: &Workspace,
+    ancestors: &[GroupMeta],
+    environment: Option<&str>,
+) -> Result<BTreeMap<String, String>> {
+    let session = Session::load(
+        ws,
+        &RunOptions {
+            environment: environment.map(str::to_string),
+            persist: false,
+            ..RunOptions::default()
+        },
+    )?;
+    let collection_vars = ancestors
+        .first()
+        .map(|c| enabled_vars(&c.variables))
+        .unwrap_or_default();
+    Ok(session.scope(&collection_vars))
+}
+
 pub async fn run_draft(
     ws: &Workspace,
     request: &Request,
     parent_id: Option<&str>,
     opts: &RunOptions,
 ) -> Result<RunResult> {
-    let ancestors = match ws.request_context(&request.id) {
-        Ok(ctx) => ctx.ancestors,
-        Err(Error::NotFound(_)) => match parent_id {
-            Some(pid) => ws.group_chain(pid)?,
-            None => Vec::new(),
-        },
-        Err(e) => return Err(e),
-    };
+    let ancestors = ancestors_for(ws, request, parent_id)?;
     let mut session = Session::load(ws, opts)?;
     let result = execute(ws, &mut session, request, &ancestors).await;
     if opts.persist {
@@ -975,5 +1056,64 @@ mod tests {
             .unwrap();
         assert!(result.error.is_some());
         assert!(result.response.is_none());
+    }
+    #[tokio::test]
+    async fn cookie_jar_follows_redirects_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::init(dir.path(), "Cookies").unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/login"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "/me")
+                    .insert_header("set-cookie", "sid=abc123; Path=/; HttpOnly"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me"))
+            .and(header("cookie", "sid=abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ada"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let o = RunOptions {
+            persist: false,
+            ..Default::default()
+        };
+
+        let login = Request::new("Login", "POST", format!("{}/login", server.uri()));
+        let r = run_draft(&ws, &login, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(200), "{r:#?}");
+
+        let me = Request::new("Me", "GET", format!("{}/me", server.uri()));
+        let r = run_draft(&ws, &me, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(200));
+        assert!(r
+            .request
+            .headers
+            .iter()
+            .any(|h| h.key == "Cookie" && h.value == "sid=abc123"));
+        let saved = std::fs::read_to_string(CookieJar::of(&ws).path()).unwrap();
+        assert!(saved.contains("abc123"));
+
+        // Opted out, or an explicit header: the jar is not used.
+        let mut off = me.clone();
+        off.settings.cookies = false;
+        let r = run_draft(&ws, &off, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
+        let mut explicit = me.clone();
+        explicit.headers.push(KeyValue::new("Cookie", "sid=other"));
+        let r = run_draft(&ws, &explicit, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
+
+        CookieJar::of(&ws).clear(None).unwrap();
+        let r = run_draft(&ws, &me, None, &o).await.unwrap();
+        assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
     }
 }

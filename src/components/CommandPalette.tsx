@@ -3,6 +3,7 @@
 import {
   Bot,
   Code2,
+  Cookie,
   Download,
   FolderTree,
   GitBranch,
@@ -152,8 +153,9 @@ export function CommandPalette() {
           if (tab) void s.sendTab(tab.id);
         },
       },
+      { label: "Copy as cURL", run: () => void s.copyAsCurl({ requestId: r.id }) },
+      { label: "Code snippet…", run: () => void s.showCodeDialog({ requestId: r.id }) },
       { label: "Copy URL", run: () => void navigator.clipboard?.writeText(r.url) },
-      { label: "Copy name", run: () => void navigator.clipboard?.writeText(r.name) },
     ];
     const commands: Item[] = [
       { id: "new", label: "New request", icon: <Plus size={17} strokeWidth={1.5} />, shortcut: "Ctrl N", section: "Commands", run: () => void s.newRequestHere() },
@@ -174,6 +176,7 @@ export function CommandPalette() {
       { id: "theme", label: s.theme === "dark" ? "Use light theme" : "Use dark theme", icon: <Moon size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.toggleTheme() },
       { id: "mcp", label: "Connect an AI agent (MCP)", icon: <Bot size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("mcp") },
       { id: "envs", label: "Edit environments", icon: <SlidersHorizontal size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("environments") },
+      { id: "cookies", label: "Manage cookies", icon: <Cookie size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.showCookies() },
       ...(tree?.collections ?? []).map((c) => ({
         id: `run:${c.meta.id}`,
         label: `Run ${c.meta.name}`,

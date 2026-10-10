@@ -7,8 +7,13 @@ import type {
   AgentPermissions,
   Branch,
   Commit,
+  CookieInfo,
+  CookieKey,
   Environment,
   EnvironmentView,
+  ExportRequest,
+  OAuth2,
+  OAuthToken,
   GroupMeta,
   FileChanges,
   GroupNode,
@@ -42,6 +47,16 @@ const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// ---------------------------------------------------------------- cookie jar
+
+const jars = new Map<string, CookieInfo[]>();
+const jar = (workspaceId: string) => {
+  let j = jars.get(workspaceId);
+  if (!j) jars.set(workspaceId, (j = []));
+  return j;
+};
+const sameCookie = (c: CookieKey, k: CookieKey) => c.domain === k.domain && c.path === k.path && c.name === k.name;
 
 const kv = (key: string, value: string) => ({ key, value, enabled: true });
 
@@ -108,10 +123,24 @@ function seed(): MockWorkspace[] {
     variables: [{ key: "apiVersion", value: "v1", enabled: true }],
     auth: { type: "bearer", token: "{{apiToken}}" },
   });
-  const customers = group("Customers API", [
-    r(req("Search customers", "GET", "{{baseUrl}}/v1/customers", { params: [kv("q", "ada")] })),
-    r(req("Create customer", "POST", "{{baseUrl}}/v1/customers", { body: { mode: "json", text: '{\n  "name": "Ada Lovelace",\n  "email": "ada@example.com"\n}' } })),
-  ]);
+  const customers = group(
+    "Customers API",
+    [
+      r(req("Search customers", "GET", "{{baseUrl}}/v1/customers", { params: [kv("q", "ada")] })),
+      r(req("Create customer", "POST", "{{baseUrl}}/v1/customers", { body: { mode: "json", text: '{\n  "name": "Ada Lovelace",\n  "email": "ada@example.com"\n}' } })),
+    ],
+    {
+      auth: {
+        type: "oauth2",
+        grant: "authorization-code",
+        authUrl: "https://id.acme.dev/oauth2/authorize",
+        tokenUrl: "https://id.acme.dev/oauth2/token",
+        clientId: "courion-desktop",
+        scope: "openid customers:read customers:write",
+        extraParams: [{ key: "audience", value: "https://api.acme.dev", enabled: true }],
+      },
+    },
+  );
   const auth = group("Auth", [
     r(
       req("Issue access token", "POST", "{{authUrl}}/oauth/token", {
@@ -162,6 +191,13 @@ function seed(): MockWorkspace[] {
   const payments = mk("Payments", "Payments Team", "/home/dev/payments-service/api-tests", [orders, customers, auth, webhooks], [local, staging, production]);
   payments.entry.prefs.bookmarks = [orders.meta.id];
   payments.runtime = { traceId: "t-91c2" };
+  const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString().replace(/\.\d+Z$/, "Z");
+  jars.set(payments.entry.id, [
+    { name: "sid", value: "s_7f3a9c21e04b", domain: "localhost", includeSubdomains: false, path: "/", secure: false, httpOnly: true, sameSite: "Lax" },
+    { name: "csrftoken", value: "Xq9vK2mP8rT4", domain: "localhost", includeSubdomains: false, path: "/", expires: inDays(30), secure: false, httpOnly: false, sameSite: "Strict" },
+    { name: "__cf_bm", value: "pV3.kQ8-1728480000-1.0.1.1", domain: "acme.dev", includeSubdomains: true, path: "/", expires: inDays(0.02), secure: true, httpOnly: true, sameSite: "None" },
+    { name: "staging_session", value: "eyJ1aWQiOiJjdXNfOWZBM2tMMiJ9", domain: "api.staging.acme.dev", includeSubdomains: false, path: "/v1", expires: inDays(7), secure: true, httpOnly: true },
+  ]);
   const day = 86_400_000;
   const h = (name: string, method: string, status: number, ago: number): HistoryEntry => ({
     id: uid(),
@@ -272,6 +308,51 @@ function findRequest(w: MockWorkspace, id: string): { request: Request; parent: 
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
+// ---------------------------------------------------------------- OAuth 2.0
+
+const oauthTokens = new Map<string, OAuthToken>();
+let oauthCancel: (() => void) | null = null;
+
+function effectiveOAuth(w: MockWorkspace, request: Request, parentId: string | null): OAuth2 {
+  let chain = findRequest(w, request.id)?.chain;
+  if (!chain && parentId) {
+    chain = [];
+    let at = findGroup(w, parentId);
+    while (at) {
+      chain.unshift(at.group);
+      at = at.parent ? findGroup(w, at.parent.meta.id) : null;
+    }
+  }
+  const auth =
+    request.auth && request.auth.type !== "inherit"
+      ? request.auth
+      : [...(chain ?? [])]
+          .reverse()
+          .map((g) => g.meta.auth)
+          .find((a) => a && a.type !== "inherit");
+  if (auth?.type !== "oauth2") throw new Error("this request doesn't use OAuth 2.0 (its own auth or a parent's)");
+  return auth;
+}
+
+const oauthKey = (workspaceId: string, o: OAuth2) => [workspaceId, o.grant, o.tokenUrl, o.clientId, o.scope ?? "", o.username ?? ""].join(" ");
+
+function cookieHeaderFor(workspaceId: string, url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url.includes("://") ? url : `http://${url}`);
+  } catch {
+    return null;
+  }
+  const found = jar(workspaceId).filter((c) => {
+    const host = u.hostname;
+    const domainOk = host === c.domain || (c.includeSubdomains && host.endsWith(`.${c.domain}`));
+    const pathOk = c.path === "/" || u.pathname === c.path || u.pathname.startsWith(c.path.replace(/\/?$/, "/"));
+    return domainOk && pathOk && (!c.secure || u.protocol === "https:") && (!c.expires || Date.parse(c.expires) > Date.now());
+  });
+  return found.length ? found.map((c) => `${c.name}=${c.value}`).join("; ") : null;
+}
+
+
 function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: string | null): RunResult {
   const env = w.environments.find((e) => e.id === envId);
   const vars: Record<string, string> = {};
@@ -288,6 +369,46 @@ function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: 
     .map((h) => ({ key: h.key, value: sub(h.value) }));
   const body = request.body && "text" in request.body ? sub(request.body.text) : undefined;
   const status = request.method === "POST" ? 201 : request.method === "DELETE" ? 204 : 200;
+  const effective = request.auth && request.auth.type !== "inherit" ? request.auth : [...chain].reverse().map((g) => g.meta.auth).find((a) => a && a.type !== "inherit");
+  if (effective?.type === "oauth2" && !headers.some((h) => h.key.toLowerCase() === "authorization")) {
+    const token = oauthTokens.get(oauthKey(w.entry.id, effective));
+    if (token) headers.push({ key: "Authorization", value: `${effective.headerPrefix || "Bearer"} ${token.accessToken}` });
+    else if (effective.grant === "authorization-code" || effective.grant === "device-code") {
+      return {
+        id: uid(),
+        requestId: request.id || null,
+        requestName: request.name,
+        startedAt: new Date().toISOString(),
+        request: { method: request.method, url, headers, body },
+        response: null,
+        error: "OAuth 2.0: no access token yet. Open the Authorization tab and click Sign in.",
+        tests: [],
+        logs: [],
+        scriptErrors: [],
+        skipped: false,
+      };
+    }
+  }
+  const useJar = request.settings?.cookies !== false && !headers.some((h) => h.key.toLowerCase() === "cookie");
+  const cookie = useJar ? cookieHeaderFor(w.entry.id, url) : null;
+  if (cookie) headers.push({ key: "Cookie", value: cookie });
+  const setCookies: string[] = [];
+  if (useJar && request.method === "POST" && /\/(login|sessions?|signin)\b/.test(url)) {
+    const host = (() => {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return "localhost";
+      }
+    })();
+    const value = `s_${uid().slice(0, 12)}`;
+    setCookies.push(`sid=${value}; Path=/; HttpOnly; SameSite=Lax`);
+    const j = jar(w.entry.id);
+    const c: CookieInfo = { name: "sid", value, domain: host, includeSubdomains: false, path: "/", secure: false, httpOnly: true, sameSite: "Lax" };
+    const at = j.findIndex((x) => sameCookie(x, c));
+    if (at >= 0) j[at] = c;
+    else j.push(c);
+  }
   const scripts = [...chain.map((g) => g.meta.scripts?.postResponse ?? ""), request.scripts?.postResponse ?? ""];
   const tests = scripts.flatMap((s, i) =>
     [...s.matchAll(/(?:trax|pm)\.test\(\s*["'`](.+?)["'`]/g)].map((m) => ({
@@ -327,6 +448,7 @@ function fakeRun(w: MockWorkspace, request: Request, chain: MockGroup[], envId: 
         { key: "content-type", value: html ? "text/html; charset=utf-8" : "application/json" },
         { key: "x-request-id", value: uid() },
         { key: "date", value: new Date().toUTCString() },
+        ...setCookies.map((value) => ({ key: "set-cookie", value })),
       ],
       body: responseBody,
       size: responseBody.length,
@@ -642,6 +764,137 @@ const handlers: Record<string, (a: Args) => unknown> = {
     return structuredClone(env);
   },
   import_json: (a) => importPostman(ws(a.workspaceId), s(a, "json")),
+  oauth_token_status: (a) => {
+    const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
+    const token = oauthTokens.get(oauthKey(s(a, "workspaceId"), o)) ?? null;
+    return {
+      token,
+      fresh: !!token && (!token.expiresAt || Date.parse(token.expiresAt) - 30_000 > Date.now()),
+      needsUser: o.grant === "authorization-code" || o.grant === "device-code",
+    };
+  },
+  oauth_get_token: async (a) => {
+    const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
+    if (!o.tokenUrl) throw new Error("the URL is empty");
+    oauthCancel?.();
+    const emit = (p: unknown) => listeners.get("oauth-prompt")?.forEach((h) => h(p));
+    let wait = 700;
+    if (o.grant === "authorization-code") {
+      emit({ kind: "browser", url: `${o.authUrl}?response_type=code&client_id=${encodeURIComponent(o.clientId)}&code_challenge_method=S256` });
+      wait = 2600;
+    } else if (o.grant === "device-code") {
+      emit({ kind: "device", userCode: "WDJB-MJHT", verificationUri: "https://id.acme.dev/device", verificationUriComplete: "https://id.acme.dev/device?user_code=WDJB-MJHT", expiresIn: 900 });
+      wait = 4000;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, wait);
+      oauthCancel = () => {
+        clearTimeout(t);
+        reject(new Error("sign-in cancelled"));
+      };
+    });
+    oauthCancel = null;
+    const now = Date.now();
+    const token: OAuthToken = {
+      accessToken: `eyJhbGciOiJSUzI1NiIsImtpZCI6Im1vY2sifQ.${btoa(JSON.stringify({ sub: "ada", scope: o.scope ?? "" })).replace(/=+$/, "")}.${uid().slice(0, 12)}`,
+      tokenType: "Bearer",
+      refreshToken: o.grant === "client-credentials" ? null : `rt_${uid().slice(0, 16)}`,
+      expiresAt: new Date(now + 3600_000).toISOString(),
+      scope: o.scope || null,
+      obtainedAt: new Date(now).toISOString(),
+    };
+    oauthTokens.set(oauthKey(s(a, "workspaceId"), o), token);
+    return token;
+  },
+  oauth_cancel: () => void oauthCancel?.(),
+  oauth_refresh_token: async (a) => {
+    const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
+    const key = oauthKey(s(a, "workspaceId"), o);
+    const old = oauthTokens.get(key);
+    if (!old?.refreshToken) throw new Error("there is no refresh token");
+    await delay(400);
+    const token = { ...old, accessToken: `${old.accessToken.split(".").slice(0, 2).join(".")}.${uid().slice(0, 12)}`, expiresAt: new Date(Date.now() + 3600_000).toISOString(), obtainedAt: new Date().toISOString() };
+    oauthTokens.set(key, token);
+    return token;
+  },
+  oauth_clear_token: (a) => {
+    const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
+    return oauthTokens.delete(oauthKey(s(a, "workspaceId"), o));
+  },
+  list_cookies: (a) =>
+    [...jar(s(a, "workspaceId"))]
+      .filter((c) => !c.expires || Date.parse(c.expires) > Date.now())
+      .sort((x, y) => x.domain.localeCompare(y.domain) || x.path.localeCompare(y.path) || x.name.localeCompare(y.name)),
+  save_cookie: (a) => {
+    const j = jar(s(a, "workspaceId"));
+    const c = { ...(a.cookie as CookieInfo) };
+    c.domain = c.domain.trim().replace(/^\./, "").toLowerCase();
+    c.path = c.path.startsWith("/") ? c.path : `/${c.path}`;
+    if (!c.name || /[\s=;,]/.test(c.name)) throw new Error(`invalid cookie name "${c.name}"`);
+    if (c.value.includes(";")) throw new Error(`the value of ${c.name} can't contain ";"`);
+    if (!c.domain) throw new Error("invalid cookie domain");
+    if (c.expires && Date.parse(c.expires) <= Date.now()) throw new Error("the cookie has already expired");
+    const prev = a.previous as CookieKey | null;
+    const keep = j.filter((x) => !(prev && sameCookie(x, prev)) && !sameCookie(x, c));
+    jars.set(s(a, "workspaceId"), [...keep, c]);
+    return c;
+  },
+  delete_cookie: (a) => {
+    const j = jar(s(a, "workspaceId"));
+    const keep = j.filter((x) => !sameCookie(x, a.key as CookieKey));
+    jars.set(s(a, "workspaceId"), keep);
+    return keep.length !== j.length;
+  },
+  clear_cookies: (a) => {
+    const j = jar(s(a, "workspaceId"));
+    const d = (a.domain as string | null)?.replace(/^\./, "").toLowerCase();
+    const keep = d ? j.filter((c) => c.domain !== d && !c.domain.endsWith(`.${d}`)) : [];
+    jars.set(s(a, "workspaceId"), keep);
+    return j.length - keep.length;
+  },
+  export_request: (a): ExportRequest => {
+    const w = ws(a.workspaceId);
+    const request = a.request as Request;
+    const chain = findRequest(w, request.id)?.chain ?? [];
+    const env = w.environments.find((e) => e.id === a.environmentId);
+    const vars: Record<string, string> = {};
+    chain[0]?.meta.variables?.forEach((v) => (vars[v.key] = v.value));
+    env?.variables.forEach((v) => v.enabled && (vars[v.key] = v.value));
+    Object.assign(vars, env?.overrides ?? {}, w.runtime);
+    const sub = (t: string) => (a.resolve ? t.replace(/\{\{\s*([^{}\s]+)\s*\}\}/g, (m, k: string) => vars[k] ?? m) : t);
+    let url = request.url;
+    const params = (request.params ?? []).filter((p) => p.enabled && p.key);
+    if (params.length) url += (url.includes("?") ? "&" : "?") + params.map((p) => `${p.key}=${p.value}`).join("&");
+    const headers = [...chain.flatMap((g) => g.meta.headers ?? []), ...(request.headers ?? [])]
+      .filter((h) => h.enabled && h.key)
+      .map((h) => ({ key: h.key, value: sub(h.value) }));
+    const b = request.body ?? { mode: "none" };
+    if ((b.mode === "json" || b.mode === "graphql") && !headers.some((h) => h.key.toLowerCase() === "content-type")) headers.push({ key: "Content-Type", value: "application/json" });
+    if (b.mode === "form-urlencoded") headers.push({ key: "Content-Type", value: "application/x-www-form-urlencoded" });
+    const auth = request.auth?.type === "inherit" || !request.auth ? [...chain].reverse().map((g) => g.meta.auth).find((x) => x && x.type !== "inherit") : request.auth;
+    let basicAuth = null;
+    if (auth?.type === "bearer") headers.push({ key: "Authorization", value: `Bearer ${sub(auth.token)}` });
+    if (auth?.type === "basic") basicAuth = { username: sub(auth.username), password: sub(auth.password) };
+    if (auth?.type === "api-key" && auth.location === "header") headers.push({ key: auth.key, value: sub(auth.value) });
+    const warnings: string[] = [];
+    if (auth?.type === "oauth2") {
+      const token = a.resolve ? oauthTokens.get(oauthKey(w.entry.id, auth)) : undefined;
+      headers.push({ key: "Authorization", value: `${auth.headerPrefix || "Bearer"} ${token?.accessToken ?? "<access token>"}` });
+      if (a.resolve && !token) warnings.push("No OAuth 2.0 access token yet: send the request or get one in the Authorization tab, then copy again.");
+    }
+    const body: ExportRequest["body"] =
+      b.mode === "json" || b.mode === "text" || b.mode === "xml"
+        ? { kind: "text", text: sub(b.text) }
+        : b.mode === "form-urlencoded"
+          ? { kind: "form", fields: b.fields.filter((f) => f.enabled).map((f) => [f.key, sub(f.value)] as [string, string]) }
+          : b.mode === "multipart"
+            ? { kind: "multipart", parts: b.fields.filter((f) => f.enabled).map((f) => ({ name: f.key, value: sub(f.value), isFile: !!f.isFile })) }
+            : b.mode === "graphql"
+              ? { kind: "text", text: JSON.stringify({ query: b.query, variables: b.variables ? safeJson(b.variables) : null }) }
+              : { kind: "none" };
+    if (request.scripts?.preRequest?.trim()) warnings.unshift("Pre-request scripts don't run for exports, so anything they set is missing.");
+    return { method: request.method.toUpperCase(), url: sub(url), headers, body, basicAuth, warnings };
+  },
   agent_overview: (a) => {
     const now = Date.now();
     const session = (pid: number, client: string, clientId: string, ago: number) => ({

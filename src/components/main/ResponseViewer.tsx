@@ -1,8 +1,13 @@
 "use client";
 
-import { Bookmark, Check, Copy, Loader2, Minus, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { openSearchPanel } from "@codemirror/search";
+import type { ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { Bookmark, Check, Cookie, Copy, Download, ListFilter, Loader2, Minus, Search, Trash2, WrapText, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
+import { errorMessage, saveToFile } from "@/lib/api";
+import { expiryLabel, hostOf, parseCookieHeader, parseSetCookie } from "@/lib/cookies";
+import { jsonPath, JsonPathError } from "@/lib/jsonpath";
 import { useStore, type RequestTab } from "@/lib/store";
 import type { ResponseData, SentRequest } from "@/lib/types";
 import { cx, formatDuration, formatSize, methodColor, prettyJson, statusColor, timeAgo } from "@/lib/util";
@@ -10,7 +15,7 @@ import { cx, formatDuration, formatSize, methodColor, prettyJson, statusColor, t
 import { CodeEditor, type CodeLanguage } from "../editors/CodeEditor";
 import { Pills, TabStrip } from "../ui/Segmented";
 
-type Section = "body" | "headers" | "tests" | "console" | "request" | "saved";
+type Section = "body" | "headers" | "cookies" | "tests" | "console" | "request" | "saved";
 
 function contentType(r: ResponseData): string {
   return r.headers.find((h) => h.key.toLowerCase() === "content-type")?.value ?? "";
@@ -108,24 +113,151 @@ function HtmlPreview({ html, url }: { html: string; url: string }) {
   );
 }
 
+/** Bodies larger than this skip formatting and highlighting. */
+const LARGE_BODY = 1_500_000;
+const WRAP_KEY = "http-trax.response-wrap";
+
+const EXTENSIONS: [RegExp, string][] = [
+  [/json/, "json"],
+  [/html/, "html"],
+  [/xml/, "xml"],
+  [/csv/, "csv"],
+  [/javascript/, "js"],
+  [/text\/plain/, "txt"],
+  [/image\/png/, "png"],
+  [/image\/jpe?g/, "jpg"],
+  [/image\/gif/, "gif"],
+  [/image\/webp/, "webp"],
+  [/image\/svg/, "svg"],
+  [/pdf/, "pdf"],
+  [/zip/, "zip"],
+];
+
+/** A file name for "Save to file": the URL's last segment with an extension from the content type. */
+function fileNameFor(response: ResponseData, ct: string): string {
+  let last = "response";
+  try {
+    last = decodeURIComponent(new URL(response.url).pathname.split("/").filter(Boolean).pop() ?? "response") || "response";
+  } catch {
+    // relative or invalid URL
+  }
+  if (/\.[a-z0-9]{1,5}$/i.test(last)) return last;
+  const ext = EXTENSIONS.find(([re]) => re.test(ct))?.[1];
+  return ext ? `${last}.${ext}` : last;
+}
+
+function ToolButton({ label, pressed, onClick, children }: { label: string; pressed?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={cx("inline-flex h-[26px] w-[26px] items-center justify-center rounded-md", pressed ? "bg-selected text-text" : "text-muted hover:bg-hover hover:text-text")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SaveButton({ response, ct }: { response: ResponseData; ct: string }) {
+  const toast = useStore((s) => s.toast);
+  return (
+    <ToolButton
+      label="Save to file"
+      onClick={async () => {
+        try {
+          const contents = response.bodyBase64 ? { base64: response.bodyBase64 } : { text: response.body };
+          if (await saveToFile(fileNameFor(response, ct), contents, ct || undefined)) toast("success", "Response saved to file");
+        } catch (e) {
+          toast("error", errorMessage(e));
+        }
+      }}
+    >
+      <Download size={14} strokeWidth={1.5} />
+    </ToolButton>
+  );
+}
+
 function BodyView({ response }: { response: ResponseData }) {
   const ct = contentType(response);
   const isHtml = ct.includes("text/html") || (!ct && /^\s*<(!doctype html|html)/i.test(response.body));
   const [mode, setMode] = useState<"pretty" | "raw" | "preview">(isHtml ? "preview" : "pretty");
-  if (response.bodyBase64) {
-    if (ct.startsWith("image/")) {
-      return (
-        <div className="flex flex-1 items-center justify-center overflow-auto p-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`data:${ct};base64,${response.bodyBase64}`} alt="Response body" className="max-h-full max-w-full rounded border border-border" />
-        </div>
-      );
+  const [wrap, setWrapState] = useState(() => {
+    try {
+      return localStorage.getItem(WRAP_KEY) !== "off";
+    } catch {
+      return true;
     }
-    return <Empty title="Binary body" text={`${formatSize(response.size)} of ${ct || "unknown type"}.`} />;
+  });
+  const [filter, setFilter] = useState<string | null>(null);
+  const editor = useRef<ReactCodeMirrorRef>(null);
+  const body = response.body;
+  const large = body.length > LARGE_BODY;
+  const isJson = !response.bodyBase64 && languageFor(ct, body) === "json";
+  const parsed = useMemo(() => {
+    if (!isJson || filter === null) return undefined;
+    try {
+      return { value: JSON.parse(body) as unknown };
+    } catch {
+      return undefined;
+    }
+  }, [isJson, filter, body]);
+  const filtered = useMemo((): { text: string; count: number } | { error: string } | null => {
+    if (filter === null || !filter.trim() || !parsed) return null;
+    try {
+      const hits = jsonPath(parsed.value, filter);
+      return { text: JSON.stringify(hits.length === 1 ? hits[0] : hits, null, 2), count: hits.length };
+    } catch (e) {
+      return { error: e instanceof JsonPathError ? e.message : String(e) };
+    }
+  }, [filter, parsed]);
+
+  const setWrap = (on: boolean) => {
+    setWrapState(on);
+    try {
+      localStorage.setItem(WRAP_KEY, on ? "on" : "off");
+    } catch {
+      // storage unavailable
+    }
+  };
+
+  if (response.bodyBase64) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center gap-2.5 px-5 pt-2.5 pb-1">
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">
+            {ct || "Binary"} · {formatSize(response.size)}
+          </span>
+          <SaveButton response={response} ct={ct} />
+        </div>
+        {ct.startsWith("image/") ? (
+          <div className="flex flex-1 items-center justify-center overflow-auto p-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={`data:${ct};base64,${response.bodyBase64}`} alt="Response body" className="max-h-full max-w-full rounded border border-border" />
+          </div>
+        ) : (
+          <Empty title="Binary body" text={`${formatSize(response.size)} of ${ct || "unknown type"}. Save it to open it elsewhere.`} />
+        )}
+      </div>
+    );
   }
-  if (!response.body) return <Empty title="Empty body" text="The server sent no content." />;
-  const lang = languageFor(ct, response.body);
-  const pretty = lang === "json" ? (prettyJson(response.body) ?? response.body) : response.body;
+  if (!body) return <Empty title="Empty body" text="The server sent no content." />;
+  const lang = large ? "text" : languageFor(ct, body);
+  const pretty = large || lang !== "json" ? body : (prettyJson(body) ?? body);
+  const shown = filtered && "text" in filtered ? filtered.text : pretty;
+  const search = () => {
+    if (mode === "preview") setMode("pretty");
+    requestAnimationFrame(() => {
+      const view = editor.current?.view;
+      if (view) {
+        view.focus();
+        openSearchPanel(view);
+      }
+    });
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2.5 px-5 pt-2.5 pb-1">
@@ -139,17 +271,137 @@ function BodyView({ response }: { response: ResponseData }) {
           onChange={setMode}
         />
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">{ct}</span>
-        <CopyButton text={response.body} />
+        <div className="flex items-center gap-0.5">
+          {isJson && (
+            <ToolButton
+              label="Filter with JSONPath"
+              pressed={filter !== null}
+              onClick={() => {
+                setFilter(filter === null ? "" : null);
+                if (mode !== "pretty") setMode("pretty");
+              }}
+            >
+              <ListFilter size={14} strokeWidth={1.5} />
+            </ToolButton>
+          )}
+          <ToolButton label="Search (Ctrl+F)" onClick={search}>
+            <Search size={14} strokeWidth={1.5} />
+          </ToolButton>
+          <ToolButton label="Wrap long lines" pressed={wrap} onClick={() => setWrap(!wrap)}>
+            <WrapText size={14} strokeWidth={1.5} />
+          </ToolButton>
+          <SaveButton response={response} ct={ct} />
+          <CopyButton text={filtered && "text" in filtered ? filtered.text : body} />
+        </div>
       </div>
+      {filter !== null && (
+        <div className="flex shrink-0 items-center gap-2.5 px-5 pt-1 pb-1.5">
+          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border-strong px-2.5 focus-within:border-accent-line">
+            <span className="sr-only">JSONPath filter</span>
+            <ListFilter size={13} className="shrink-0 text-faint" />
+            <input
+              autoFocus
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setFilter(null);
+                }
+              }}
+              placeholder="$.data[*].id  or  $..items[?(@.price < 10)]"
+              spellCheck={false}
+              className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] outline-none placeholder:text-faint"
+            />
+          </label>
+          <span className={cx("shrink-0 text-[12px]", filtered && "error" in filtered ? "text-danger" : "text-faint")}>
+            {!filtered ? (parsed ? "Type a JSONPath" : "Not valid JSON") : "error" in filtered ? filtered.error : `${filtered.count} ${filtered.count === 1 ? "match" : "matches"}`}
+          </span>
+        </div>
+      )}
+      {large && mode !== "preview" && (
+        <div className="mx-5 mb-1 rounded-lg bg-warn/10 px-3 py-1.5 text-[12.5px] text-warn">
+          Large response ({formatSize(response.size)}): formatting and highlighting are off. Save it to inspect it elsewhere.
+        </div>
+      )}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {mode === "preview" ? (
-          <HtmlPreview html={response.body} url={response.url} />
+          <HtmlPreview html={body} url={response.url} />
         ) : mode === "pretty" ? (
-          <CodeEditor value={pretty} language={lang} readOnly wrap />
+          <CodeEditor ref={editor} value={shown} language={filtered && "text" in filtered ? "json" : lang} readOnly wrap={wrap} />
         ) : (
-          <pre className="px-5 py-3 font-mono text-[13px] leading-[21px] break-all whitespace-pre-wrap text-muted">{response.body}</pre>
+          <CodeEditor ref={editor} value={body} language="text" readOnly wrap={wrap} lineNumbers={false} />
         )}
       </div>
+    </div>
+  );
+}
+
+function CookiesView({ response, sent }: { response: ResponseData | null | undefined; sent: SentRequest | null | undefined }) {
+  const showCookies = useStore((s) => s.showCookies);
+  const url = response?.url || sent?.url || "";
+  const set = (response?.headers ?? [])
+    .filter((h) => h.key.toLowerCase() === "set-cookie")
+    .map((h) => parseSetCookie(h.value, url))
+    .filter((c) => c !== null);
+  const sentHeader = sent?.headers.find((h) => h.key.toLowerCase() === "cookie");
+  const sentCookies = sentHeader ? parseCookieHeader(sentHeader.value) : [];
+  const host = hostOf(url) ?? undefined;
+  const manage = (
+    <button type="button" className="btn h-7" onClick={() => showCookies(host)}>
+      <Cookie size={13} strokeWidth={1.6} /> Manage cookies
+    </button>
+  );
+  if (set.length === 0 && sentCookies.length === 0) {
+    return (
+      <Empty title="No cookies" text="This response didn't set any cookies, and none were sent with the request.">
+        <div className="mt-3">{manage}</div>
+      </Empty>
+    );
+  }
+  return (
+    <div className="px-5 py-4">
+      {set.length > 0 && (
+        <section className="mb-6">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="eyebrow">Set by this response</span>
+          </div>
+          <div className="overflow-hidden rounded-[10px] border border-border-mid">
+            {set.map((c, i) => (
+              <div key={i} className={cx("flex items-start gap-3 px-3.5 py-2.5", i > 0 && "border-t border-border-soft")}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-mono text-[13px] text-key">{c.name}</span>
+                    <span className="font-mono text-[12px] text-faint">
+                      {c.includeSubdomains ? "." : ""}
+                      {c.domain}
+                      {c.path}
+                    </span>
+                    {c.httpOnly && <span className="rounded-[5px] bg-selected px-1.5 py-px text-[11px] text-muted">HttpOnly</span>}
+                    {c.secure && <span className="rounded-[5px] bg-selected px-1.5 py-px text-[11px] text-muted">Secure</span>}
+                    {c.sameSite && <span className="rounded-[5px] bg-selected px-1.5 py-px text-[11px] text-muted">SameSite={c.sameSite}</span>}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[12.5px] text-muted" title={c.value}>
+                    {c.value || <span className="text-faint">empty</span>}
+                  </div>
+                </div>
+                <span className={cx("shrink-0 pt-0.5 text-[12px]", expiryLabel(c.expires) === "Expired" ? "text-warn" : "text-faint")}>
+                  {expiryLabel(c.expires) === "Expired" ? "Removes it" : expiryLabel(c.expires)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {sentCookies.length > 0 && (
+        <section className="mb-6">
+          <div className="eyebrow mb-2">Sent with the request</div>
+          <div className="-mx-2.5">
+            <HeaderRows headers={sentCookies.map((c) => ({ key: c.name, value: c.value }))} />
+          </div>
+        </section>
+      )}
+      {manage}
     </div>
   );
 }
@@ -240,6 +492,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
       tabs={[
         { id: "body", label: "Body" },
         { id: "headers", label: "Headers", badge: response?.headers.length },
+        { id: "cookies", label: "Cookies", badge: response?.headers.filter((h) => h.key.toLowerCase() === "set-cookie").length || undefined },
         ...(!saved
           ? [
               { id: "tests" as const, label: "Tests", badge: tests.length ? `${passed}/${tests.length}` : undefined, tone: failed ? ("danger" as const) : ("ok" as const) },
@@ -373,6 +626,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
               ))}
             </div>
           ))}
+        {section === "cookies" && <CookiesView response={response} sent={sent} />}
         {section === "request" && (sent ? <RequestSummary req={sent} /> : <Empty title="Nothing sent yet" />)}
         {section === "saved" && savedList}
       </div>
