@@ -1,13 +1,13 @@
 "use client";
 
-import { AlertTriangle, Check, Copy, FolderOpen, GitBranch, Plus, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, FolderOpen, GitBranch, Link2, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api, errorMessage, isTauri, pickDirectory } from "@/lib/api";
 import { generate, SNIPPET_LANGS, type SnippetLang } from "@/lib/codegen";
 import { parseCurl } from "@/lib/curl";
-import { useStore } from "@/lib/store";
-import type { ExportRequest, GroupNode, Request, TreeItem } from "@/lib/types";
+import { useStore, type WorkspaceDialogMode } from "@/lib/store";
+import type { ExportRequest, GroupNode, OnboardingSpec, Request, TreeItem, WorkspaceTemplate } from "@/lib/types";
 import { cx, findChain } from "@/lib/util";
 
 import { CodeEditor } from "../editors/CodeEditor";
@@ -147,7 +147,7 @@ function PathField({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
-function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clone" }) {
+function WorkspaceDialog({ mode: initialMode }: { mode: WorkspaceDialogMode }) {
   const close = useStore((s) => s.closeDialog);
   const refresh = useStore((s) => s.refreshWorkspaces);
   const select = useStore((s) => s.selectWorkspace);
@@ -160,8 +160,34 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
   const [url, setUrl] = useState("");
   const [branch, setBranch] = useState("");
   const [subdir, setSubdir] = useState("");
+  const [sparse, setSparse] = useState("");
+  const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
+  const [template, setTemplate] = useState("blank");
+  const [link, setLink] = useState("");
+  const [parsed, setParsed] = useState<{ link: string; spec: OnboardingSpec | null; error: string | null } | null>(null);
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listWorkspaceTemplates().then(setTemplates).catch(() => undefined);
+  }, []);
+
+  // Read the onboarding link as it's pasted, to show what joining will do.
+  const pasted = link.trim();
+  const current = mode === "join" && parsed?.link === pasted ? parsed : null;
+  const spec = current?.spec ?? null;
+  useEffect(() => {
+    if (mode !== "join" || !pasted) return;
+    let cancelled = false;
+    api
+      .parseOnboardingLink(pasted)
+      .then((s) => !cancelled && setParsed({ link: pasted, spec: s, error: null }))
+      .catch((e) => !cancelled && setParsed({ link: pasted, spec: null, error: errorMessage(e) }));
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, pasted]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,10 +196,12 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
     try {
       const entry =
         mode === "create"
-          ? await api.createWorkspace(path, name || "API workspace", team || null, initGit)
+          ? await api.createWorkspace(path, name || "API workspace", team || null, initGit, template)
           : mode === "open"
             ? await api.openWorkspace(path)
-            : await api.cloneWorkspace(url, path, branch || null, subdir || null);
+            : mode === "join"
+              ? await api.onboardWorkspace(link.trim(), path, secrets)
+              : await api.cloneWorkspace(url, path, branch || null, subdir || null, sparseList(sparse));
       await refresh();
       await select(entry.id);
       toast("success", `Workspace "${entry.name}" is ready`);
@@ -189,10 +217,11 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
     { id: "create", label: "New", icon: <Plus size={14} /> },
     { id: "open", label: "Open folder", icon: <FolderOpen size={14} /> },
     { id: "clone", label: "Clone from git", icon: <GitBranch size={14} /> },
+    { id: "join", label: "Join with a link", icon: <Link2 size={14} /> },
   ];
 
   return (
-    <Modal title="Workspaces" onClose={close} width={520}>
+    <Modal title="Workspaces" onClose={close} width={560}>
       <div className="flex gap-1 border-b border-border px-4">
         {tabs.map((t) => (
           <button
@@ -229,6 +258,26 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
               <label className="label">Folder</label>
               <PathField value={path} onChange={setPath} placeholder="/home/me/payments-service/api-tests" />
             </div>
+            {templates.length > 0 && (
+              <div>
+                <label className="label" htmlFor="ws-template">
+                  Start from
+                </label>
+                <select id="ws-template" className="input" value={template} onChange={(e) => setTemplate(e.target.value)}>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} · {t.requestCount} request{t.requestCount === 1 ? "" : "s"}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11.5px] text-faint">
+                  {templates.find((t) => t.id === template)?.description}
+                  {templates.find((t) => t.id === template)?.environments.length
+                    ? ` Environments: ${templates.find((t) => t.id === template)?.environments.join(", ")}.`
+                    : ""}
+                </p>
+              </div>
+            )}
             <label className="flex items-center gap-2 text-[12.5px] text-muted">
               <input type="checkbox" checked={initGit} onChange={(e) => setInitGit(e.target.checked)} className="accent-[var(--accent)]" />
               Initialise a git repository if the folder isn&apos;t in one
@@ -267,6 +316,95 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
                 <input className="input" value={subdir} onChange={(e) => setSubdir(e.target.value)} placeholder="api-tests" />
               </div>
             </div>
+            <div>
+              <label className="label" htmlFor="clone-sparse">
+                Only check out these folders (optional)
+              </label>
+              <textarea
+                id="clone-sparse"
+                className="input h-16 py-1.5 font-mono text-[12px]"
+                value={sparse}
+                onChange={(e) => setSparse(e.target.value)}
+                placeholder={"services/payments\nshared/api-tests"}
+              />
+              <p className="mt-1 text-[11.5px] text-faint">For large monorepos: a sparse checkout skips everything else. One folder per line.</p>
+            </div>
+          </>
+        )}
+        {mode === "join" && (
+          <>
+            <p className="text-[12.5px] text-muted">
+              Paste the onboarding link a teammate shared (Settings → Team onboarding link). It clones the repository, opens the workspace and sets up the
+              environment in one step.
+            </p>
+            <div>
+              <label className="label" htmlFor="join-link">
+                Onboarding link
+              </label>
+              <input
+                id="join-link"
+                className="input font-mono text-[12px]"
+                value={link}
+                onChange={(e) => setLink(e.target.value)}
+                placeholder="courion://onboard?name=…&repo=…"
+                autoFocus
+              />
+              {current?.error && <p className="mt-1 text-[12px] text-danger">{current.error}</p>}
+            </div>
+            {spec && (
+              <div className="rounded-lg border border-border-mid px-3 py-2.5 text-[12.5px]">
+                <div className="font-medium">{spec.name}</div>
+                <dl className="mt-1 grid grid-cols-[90px_1fr] gap-x-2 gap-y-0.5 text-muted">
+                  {spec.repoUrl && (
+                    <>
+                      <dt className="text-faint">Repository</dt>
+                      <dd className="truncate font-mono text-[12px]">{spec.repoUrl}</dd>
+                    </>
+                  )}
+                  {spec.branch && (
+                    <>
+                      <dt className="text-faint">Branch</dt>
+                      <dd>{spec.branch}</dd>
+                    </>
+                  )}
+                  {spec.defaultEnv && (
+                    <>
+                      <dt className="text-faint">Environment</dt>
+                      <dd>{spec.defaultEnv}</dd>
+                    </>
+                  )}
+                  {!!spec.sparsePatterns?.length && (
+                    <>
+                      <dt className="text-faint">Folders</dt>
+                      <dd className="font-mono text-[12px]">{spec.sparsePatterns.join(", ")}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+            )}
+            {!!spec?.requiredSecrets?.length && (
+              <div>
+                <div className="label">Secrets for {spec.defaultEnv ?? "the environment"} (kept on this machine)</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {spec.requiredSecrets.map((key) => (
+                    <input
+                      key={key}
+                      aria-label={key}
+                      className="input"
+                      type="password"
+                      autoComplete="off"
+                      placeholder={key}
+                      value={secrets[key] ?? ""}
+                      onChange={(e) => setSecrets({ ...secrets, [key]: e.target.value })}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="label">{spec?.repoUrl ? "Clone into" : "Folder"}</label>
+              <PathField value={path} onChange={setPath} placeholder="/home/me/work/payments-api" />
+            </div>
           </>
         )}
         {error && <p className="rounded-md bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</p>}
@@ -274,13 +412,22 @@ function WorkspaceDialog({ mode: initialMode }: { mode: "create" | "open" | "clo
           <button type="button" className="btn" onClick={close}>
             Cancel
           </button>
-          <button type="submit" className="btn-primary" disabled={busy || !path}>
-            {busy ? "Working…" : mode === "create" ? "Create workspace" : mode === "open" ? "Open" : "Clone"}
+          <button type="submit" className="btn-primary" disabled={busy || !path || (mode === "join" && !spec)}>
+            {busy ? "Working…" : mode === "create" ? "Create workspace" : mode === "open" ? "Open" : mode === "join" ? "Join" : "Clone"}
           </button>
         </div>
       </form>
     </Modal>
   );
+}
+
+/** One sparse-checkout folder per line; null when there are none. */
+function sparseList(text: string): string[] | null {
+  const list = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return list.length ? list : null;
 }
 
 function groupOptions(collections: GroupNode[]): { id: string; label: string }[] {

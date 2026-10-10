@@ -39,6 +39,8 @@ const FOLDER_FILE: &str = "folder.yaml";
 const REQUEST_SUFFIX: &str = ".req.yaml";
 const ENV_SUFFIX: &str = ".env.yaml";
 const STATE_FILE: &str = "state.json";
+/// Prefix of a local-state secret that lives in the OS keychain.
+const KEYCHAIN_MARKER: &str = "keychain://";
 
 const GITIGNORE: &str = "# http-trax local state: runtime variables, secrets, history\n.trax/\n";
 
@@ -396,7 +398,7 @@ impl Workspace {
         }
     }
 
-    fn collections(&self) -> Result<Vec<GroupNode>> {
+    pub fn collections(&self) -> Result<Vec<GroupNode>> {
         Ok(self.tree()?.collections)
     }
 
@@ -840,9 +842,18 @@ impl Workspace {
 
     fn view(&self, mut env: Environment, shared: bool, state: &LocalState) -> EnvironmentView {
         if let Some(secrets) = state.secrets.get(&env.id) {
-            for var in env.variables.iter_mut().filter(|v| v.secret) {
+            // Vault references stay as written in the shared file; they are
+            // resolved when a request is sent.
+            for var in env
+                .variables
+                .iter_mut()
+                .filter(|v| v.secret && !crate::vault::is_vault_reference(&v.value))
+            {
                 if let Some(value) = secrets.get(&var.key) {
-                    var.value = value.clone();
+                    var.value = match value.strip_prefix(KEYCHAIN_MARKER) {
+                        Some(account) => crate::vault::keychain_get(account).unwrap_or_default(),
+                        None => value.clone(),
+                    };
                 }
             }
         }
@@ -884,22 +895,43 @@ impl Workspace {
             .ok_or_else(|| Error::NotFound(format!("environment {needle}")))
     }
 
-    /// Create or update an environment. Secret values are moved to local state.
+    /// Create or update an environment. Secret values move to the OS
+    /// keychain (with a pointer in `.trax/state.json`), or to local state when
+    /// there is no keychain. Vault references (`op://`, `vault://`, `azkv://`,
+    /// `keychain://`) are pointers, not secrets, so they stay in the shared
+    /// file for the whole team.
     pub fn save_environment(&self, env: &Environment) -> Result<Environment> {
         let mut env = env.clone();
         if env.id.is_empty() {
             env.id = new_id();
         }
         check_id(&env.id)?;
+        let use_keychain = crate::vault::load_vault_settings(&self.root)
+            .map(|s| s.use_os_keychain)
+            .unwrap_or(true);
+        let prefix = crate::vault::ws_key_prefix(&self.root);
+
         let mut shared = env.clone();
-        let secrets: BTreeMap<String, String> = env
-            .variables
-            .iter()
-            .filter(|v| v.secret)
-            .map(|v| (v.key.clone(), v.value.clone()))
-            .collect();
+        let mut secrets: BTreeMap<String, String> = BTreeMap::new();
+        for var in env.variables.iter().filter(|v| v.secret) {
+            if crate::vault::is_vault_reference(&var.value) {
+                continue;
+            }
+            let account = format!("{prefix}:{}:{}", env.id, var.key);
+            let stored = use_keychain
+                && !var.value.is_empty()
+                && crate::vault::keychain_set(&account, &var.value).is_ok();
+            if stored {
+                secrets.insert(var.key.clone(), format!("{KEYCHAIN_MARKER}{account}"));
+            } else {
+                let _ = crate::vault::keychain_delete(&account);
+                secrets.insert(var.key.clone(), var.value.clone());
+            }
+        }
         for var in shared.variables.iter_mut().filter(|v| v.secret) {
-            var.value.clear();
+            if !crate::vault::is_vault_reference(&var.value) {
+                var.value.clear();
+            }
         }
         self.update_local_state(|state| {
             if secrets.is_empty() {
@@ -947,7 +979,8 @@ impl Workspace {
     }
 
     /// Effective variables of an environment: enabled shared values, then
-    /// local overrides on top.
+    /// local overrides on top, with any external vault references (`op://`,
+    /// `vault://`, `azkv://`, `keychain://`) resolved dynamically.
     pub fn effective_environment(&self, id: &str) -> Result<(String, BTreeMap<String, String>)> {
         let view = self.environment(id)?;
         let mut vars: BTreeMap<String, String> = view
@@ -958,6 +991,14 @@ impl Workspace {
             .map(|v| (v.key.clone(), v.value.clone()))
             .collect();
         vars.extend(view.overrides);
+        // Sending the reference itself as a token would only fail later and
+        // more confusingly, so an unreachable vault stops the run here.
+        for (key, val) in vars.iter_mut() {
+            if crate::vault::is_vault_reference(val) {
+                *val = crate::vault::resolve_secret_value(&self.root, val)
+                    .map_err(|e| Error::Invalid(format!("variable `{key}`: {e}")))?;
+            }
+        }
         Ok((view.environment.name, vars))
     }
 
@@ -1207,6 +1248,9 @@ mod tests {
 
         let shared = fs::read_to_string(ws.root().join("environments/dev.env.yaml")).unwrap();
         assert!(!shared.contains("s3cr3t"));
+        // The keychain holds the value; local state only points at it.
+        let state = fs::read_to_string(ws.root().join(".trax/state.json")).unwrap();
+        assert!(!state.contains("s3cr3t") && state.contains("keychain://"));
         let view = ws.environment(&env.id).unwrap();
         assert_eq!(view.environment.variables[1].value, "s3cr3t");
 
@@ -1221,6 +1265,41 @@ mod tests {
         assert_eq!(name, "Dev");
         assert_eq!(vars["baseUrl"], "http://127.0.0.1:9000");
         assert_eq!(ws.find_environment("dev").unwrap().environment.id, env.id);
+    }
+
+    #[test]
+    fn secrets_stay_in_local_state_without_the_keychain_and_vault_refs_are_shared() {
+        let (_dir, ws) = ws();
+        crate::vault::save_vault_settings(
+            ws.root(),
+            &crate::vault::VaultSettings {
+                use_os_keychain: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut env = Environment::new("Dev");
+        let mut local = Variable::new("apiKey", "s3cr3t");
+        local.secret = true;
+        let mut pointer = Variable::new("stripeKey", "op://eng/stripe/credential");
+        pointer.secret = true;
+        env.variables.extend([local, pointer]);
+        let env = ws.save_environment(&env).unwrap();
+
+        let shared = fs::read_to_string(ws.root().join("environments/dev.env.yaml")).unwrap();
+        assert!(!shared.contains("s3cr3t"));
+        assert!(shared.contains("op://eng/stripe/credential"));
+        let state = fs::read_to_string(ws.root().join(".trax/state.json")).unwrap();
+        assert!(state.contains("s3cr3t") && !state.contains("keychain://"));
+        let view = ws.environment(&env.id).unwrap();
+        assert_eq!(view.environment.variables[0].value, "s3cr3t");
+        assert_eq!(
+            view.environment.variables[1].value,
+            "op://eng/stripe/credential"
+        );
+        // Nothing serves op:// here, so a run must not send the reference.
+        let err = ws.effective_environment(&env.id).unwrap_err().to_string();
+        assert!(err.contains("stripeKey"), "{err}");
     }
 
     #[test]

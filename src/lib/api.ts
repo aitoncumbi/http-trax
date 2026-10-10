@@ -11,8 +11,10 @@ import type {
   Branch,
   CollectionRun,
   Commit,
+  ConflictPreview,
   CookieInfo,
   CookieKey,
+  CreatePullRequestInput,
   Environment,
   EnvironmentView,
   ExportRequest,
@@ -23,23 +25,37 @@ import type {
   Identity,
   ImportSummary,
   LocalState,
+  MergeSide,
   OAuthToken,
   OAuthTokenStatus,
   MergeOutcome,
+  OnboardingSpec,
+  PrContext,
+  PrSettings,
   PullMode,
+  PullRequest,
   Remote,
   RepoStatus,
   Request,
   Resolution,
   Review,
+  AddReviewCommentInput,
+  ReviewComment,
   RunResult,
   SavedResponse,
+  SigningSettings,
+  SparseCheckoutStatus,
+  StashEntry,
   SyncReport,
   SyncSettings,
+  Tag,
+  VaultProviderStatus,
+  VaultSettings,
   WorkspaceEntry,
   WorkspaceManifest,
   WorkspacePrefs,
   WorkspaceSummary,
+  WorkspaceTemplate,
   WorkspaceTree,
 } from "./types";
 
@@ -61,11 +77,16 @@ export const api = {
   // registry
   listWorkspaces: () =>
     call<{ workspaces: WorkspaceEntry[]; activeWorkspace: string | null }>("list_workspaces"),
-  createWorkspace: (path: string, name: string, team: string | null, initGit: boolean) =>
-    call<WorkspaceEntry>("create_workspace", { path, name, team, initGit }),
+  createWorkspace: (path: string, name: string, team: string | null, initGit: boolean, template: string | null = null) =>
+    call<WorkspaceEntry>("create_workspace", { path, name, team, initGit, template }),
   openWorkspace: (path: string) => call<WorkspaceEntry>("open_workspace", { path }),
-  cloneWorkspace: (url: string, path: string, branch: string | null, subdir: string | null) =>
-    call<WorkspaceEntry>("clone_workspace", { url, path, branch, subdir }),
+  cloneWorkspace: (
+    url: string,
+    path: string,
+    branch: string | null,
+    subdir: string | null,
+    sparsePatterns: string[] | null = null,
+  ) => call<WorkspaceEntry>("clone_workspace", { url, path, branch, subdir, sparsePatterns }),
   removeWorkspace: (id: string) => call<void>("remove_workspace", { id }),
   setActiveWorkspace: (id: string) => call<void>("set_active_workspace", { id }),
   updateWorkspacePrefs: (id: string, prefs: WorkspacePrefs) =>
@@ -75,6 +96,16 @@ export const api = {
   updateManifest: (id: string, manifest: WorkspaceManifest) =>
     call<void>("update_manifest", { id, manifest }),
   inspectPath: (path: string) => call<"workspace" | "missing" | "directory" | "file">("inspect_path", { path }),
+
+  // templates & onboarding
+  listWorkspaceTemplates: () => call<WorkspaceTemplate[]>("list_workspace_templates"),
+  /** `courion://onboard?...` link for teammates; repo and branch default to `origin` and HEAD. */
+  createOnboardingLink: (workspaceId: string, repoUrl: string | null = null, branch: string | null = null) =>
+    call<string>("create_onboarding_link", { workspaceId, repoUrl, branch }),
+  parseOnboardingLink: (link: string) => call<OnboardingSpec>("parse_onboarding_link", { link }),
+  /** Clone, set up the environment (with the secrets asked for) and register, in one step. */
+  onboardWorkspace: (link: string, path: string, secrets: Record<string, string> | null = null) =>
+    call<WorkspaceEntry>("onboard_workspace", { link, path, secrets }),
 
   // contents
   loadWorkspace: (id: string) => call<WorkspaceTree>("load_workspace", { id }),
@@ -107,6 +138,14 @@ export const api = {
     call<void>("set_environment_override", { workspaceId, environmentId, key, value }),
   getLocalState: (workspaceId: string) => call<LocalState>("get_local_state", { workspaceId }),
   clearRuntimeVariables: (workspaceId: string) => call<void>("clear_runtime_variables", { workspaceId }),
+
+  // vault & keychain
+  getVaultSettings: (workspaceId: string) => call<VaultSettings>("get_vault_settings", { workspaceId }),
+  saveVaultSettings: (workspaceId: string, settings: VaultSettings) =>
+    call<void>("save_vault_settings", { workspaceId, settings }),
+  vaultProvidersStatus: (workspaceId: string) => call<VaultProviderStatus[]>("vault_providers_status", { workspaceId }),
+  resolveSecretReference: (workspaceId: string, value: string) =>
+    call<string>("resolve_secret_reference", { workspaceId, value }),
 
   // runs
   sendRequest: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
@@ -164,9 +203,43 @@ export const api = {
   restoreHistoryEntry: (workspaceId: string, entryId: string, parentId: string | null) =>
     call<Request>("restore_history_entry", { workspaceId, entryId, parentId }),
 
+  // pull requests & inline review comments
+  getPrSettings: (workspaceId: string) => call<PrContext>("get_pr_settings", { workspaceId }),
+  savePrSettings: (workspaceId: string, settings: PrSettings) =>
+    call<void>("save_pr_settings", { workspaceId, settings }),
+  listPullRequests: (workspaceId: string, stateFilter: string | null = null) =>
+    call<PullRequest[]>("list_pull_requests", { workspaceId, stateFilter }),
+  createPullRequest: (workspaceId: string, input: CreatePullRequestInput) =>
+    call<PullRequest>("create_pull_request", { workspaceId, input }),
+  approvePullRequest: (workspaceId: string, prNumber: number, body: string | null = null) =>
+    call<PullRequest>("approve_pull_request", { workspaceId, prNumber, body }),
+  mergePullRequest: (workspaceId: string, prNumber: number, method: string | null = null) =>
+    call<PullRequest>("merge_pull_request", { workspaceId, prNumber, method }),
+  listReviewComments: (
+    workspaceId: string,
+    opts: { prNumber?: number | null; requestId?: string | null } = {},
+  ) =>
+    call<ReviewComment[]>("list_review_comments", {
+      workspaceId,
+      prNumber: opts.prNumber ?? null,
+      requestId: opts.requestId ?? null,
+    }),
+  addReviewComment: (workspaceId: string, input: AddReviewCommentInput) =>
+    call<ReviewComment>("add_review_comment", { workspaceId, input }),
+  resolveReviewComment: (workspaceId: string, commentId: string, resolved: boolean) =>
+    call<ReviewComment>("resolve_review_comment", { workspaceId, commentId, resolved }),
+
   // git
   gitFileChanges: (workspaceId: string, path: string, staged: boolean) =>
     call<FileChanges>("git_file_changes", { workspaceId, path, staged }),
+  gitConflictPreview: (workspaceId: string, path: string, choices: Record<string, MergeSide> = {}) =>
+    call<ConflictPreview>("git_conflict_preview", { workspaceId, path, choices }),
+  gitResolveSemantic: (
+    workspaceId: string,
+    path: string,
+    choices: Record<string, MergeSide>,
+    manualContent: string | null = null,
+  ) => call<void>("git_resolve_semantic", { workspaceId, path, choices, manualContent }),
   gitStatus: (workspaceId: string) => call<RepoStatus>("git_status", { workspaceId }),
   gitInit: (workspaceId: string) => call<void>("git_init", { workspaceId }),
   gitStage: (workspaceId: string, paths: string[]) => call<void>("git_stage", { workspaceId, paths }),
@@ -209,6 +282,34 @@ export const api = {
   gitIdentity: (workspaceId: string) => call<Identity>("git_identity", { workspaceId }),
   gitSetIdentity: (workspaceId: string, name: string, email: string) =>
     call<void>("git_set_identity", { workspaceId, name, email }),
+  gitStashes: (workspaceId: string) => call<StashEntry[]>("git_stashes", { workspaceId }),
+  gitStashPush: (workspaceId: string, message: string | null = null, includeUntracked = true) =>
+    call<void>("git_stash_push", { workspaceId, message, includeUntracked }),
+  gitStashApply: (workspaceId: string, index: number, pop: boolean) =>
+    call<MergeOutcome>("git_stash_apply", { workspaceId, index, pop }),
+  gitStashDrop: (workspaceId: string, index: number) =>
+    call<void>("git_stash_drop", { workspaceId, index }),
+  gitCherryPick: (workspaceId: string, commit: string) =>
+    call<MergeOutcome>("git_cherry_pick", { workspaceId, commit }),
+  gitRevert: (workspaceId: string, commit: string) =>
+    call<MergeOutcome>("git_revert", { workspaceId, commit }),
+  gitTags: (workspaceId: string) => call<Tag[]>("git_tags", { workspaceId }),
+  gitCreateTag: (workspaceId: string, name: string, target: string | null = null, message: string | null = null) =>
+    call<void>("git_create_tag", { workspaceId, name, target, message }),
+  gitDeleteTag: (workspaceId: string, name: string) =>
+    call<void>("git_delete_tag", { workspaceId, name }),
+  gitPushTag: (workspaceId: string, name: string, remote: string | null = null) =>
+    call<void>("git_push_tag", { workspaceId, remote, name }),
+  gitSparseCheckoutStatus: (workspaceId: string) =>
+    call<SparseCheckoutStatus>("git_sparse_checkout_status", { workspaceId }),
+  gitSparseCheckoutSet: (workspaceId: string, patterns: string[], cone = true) =>
+    call<void>("git_sparse_checkout_set", { workspaceId, patterns, cone }),
+  gitSparseCheckoutDisable: (workspaceId: string) =>
+    call<void>("git_sparse_checkout_disable", { workspaceId }),
+  gitSigningSettings: (workspaceId: string) =>
+    call<SigningSettings>("git_signing_settings", { workspaceId }),
+  gitSetSigningSettings: (workspaceId: string, settings: SigningSettings) =>
+    call<void>("git_set_signing_settings", { workspaceId, settings }),
   syncNow: (workspaceId: string) => call<SyncReport | null>("sync_now", { workspaceId }),
   syncStatuses: () => call<Record<string, SyncReport>>("sync_statuses"),
 };

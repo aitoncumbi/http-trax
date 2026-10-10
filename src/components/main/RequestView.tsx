@@ -18,6 +18,7 @@ import { useScopeFor, VarScopeContext } from "../editors/VarScope";
 import { Switch } from "../ui/Controls";
 import { MenuButton } from "../ui/Menu";
 import { TabStrip } from "../ui/Segmented";
+import { RequestComments } from "./RequestComments";
 import { ResponseViewer } from "./ResponseViewer";
 
 type Section = "params" | "body" | "headers" | "auth" | "scripts" | "settings" | "docs";
@@ -145,6 +146,8 @@ export function RequestView({ tab }: { tab: RequestTab }) {
           </button>
         </div>
       )}
+
+      <RequestComments workspaceId={tab.workspaceId} requestId={tab.requestId} />
 
       {/* breadcrumb */}
       <div className="flex shrink-0 items-center gap-2.5 overflow-hidden px-4 pt-2.5 pb-2 text-[13px] whitespace-nowrap text-muted">

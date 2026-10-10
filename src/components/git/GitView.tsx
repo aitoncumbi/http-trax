@@ -10,9 +10,10 @@ import { cx, timeAgo } from "@/lib/util";
 
 import { Checkbox } from "../ui/Controls";
 import { MenuButton, useContextMenu } from "../ui/Menu";
-import { Pills } from "../ui/Segmented";
+import { Pills, TabStrip } from "../ui/Segmented";
 import { SidebarSection } from "../sidebar/Sidebar";
 import { BranchPopover } from "./BranchPopover";
+import { commitActions, ConflictEditor, PullRequestsPanel, SignatureBadge, StashesPanel, TagsPanel } from "./GitExtras";
 import { effectiveSelection, lists, useGit } from "./gitStore";
 import { RawDiff } from "./RawDiff";
 
@@ -279,6 +280,14 @@ export function GitChanges() {
               },
               { label: "Stage all and commit", disabled: !canCommit, onSelect: () => void commit({ stageAll: true }) },
               {
+                label: "Stash changes",
+                disabled: !!busy || staged.length + changes.length === 0,
+                onSelect: async () => {
+                  const note = await useStore.getState().prompt({ title: "Stash changes", label: "Note (optional)", initial: "WIP", confirm: "Stash" });
+                  if (note !== null) void run("stash", (w) => api.gitStashPush(w, note, true), () => "Changes stashed");
+                },
+              },
+              {
                 label: "Amend last commit",
                 disabled: !!busy || log.length === 0,
                 onSelect: () => void commit({ amend: true }),
@@ -315,6 +324,7 @@ export function GitMain() {
   const reloadKey = useGit((s) => s.reloadKey);
   const { run, setSelected } = useGit.getState();
   const [branchOpen, setBranchOpen] = useState(false);
+  const [aside, setAside] = useState<"history" | "stashes" | "tags" | "pulls">("history");
   useGitLoader(workspaceId);
 
   if (!workspaceId) return null;
@@ -497,18 +507,32 @@ export function GitMain() {
             onResolve={(how) => void run("resolve", (w) => api.gitResolve(w, selectedFile.path, how))}
           />
         ) : selectedCommit ? (
-          <CommitDetail key={selectedCommit.hash} workspaceId={workspaceId} commit={selectedCommit} />
+          <CommitDetail key={selectedCommit.hash} workspaceId={workspaceId} commit={selectedCommit} current={current} busy={!!busy} />
         ) : (
           <Clean status={status} current={current} fetchedAt={fetchedAt} />
         )}
       </section>
 
       <aside aria-label="History" className="flex w-[276px] shrink-0 flex-col border-l border-border bg-panel">
-        <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border pr-3 pl-3.5">
-          <span className="text-[13px] font-semibold">History</span>
-          <span className="truncate text-[12px] text-faint">{current}</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-3">
+        <TabStrip
+          label="History and more"
+          value={aside}
+          onChange={setAside}
+          tabs={[
+            { id: "history", label: "History" },
+            { id: "pulls", label: "PRs" },
+            { id: "stashes", label: "Stashes" },
+            { id: "tags", label: "Tags" },
+          ]}
+        />
+        {aside !== "history" && (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {aside === "stashes" && <StashesPanel hasChanges={files.some((f) => !f.conflicted)} />}
+            {aside === "tags" && <TagsPanel hasRemote={status.hasRemote} />}
+            {aside === "pulls" && <PullRequestsPanel />}
+          </div>
+        )}
+        <div className={cx("min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-3", aside !== "history" && "hidden")}>
           {log.length === 0 && <Hint>No commits yet.</Hint>}
           {log.map((c, i) => {
             const isHead = c.refs.some((r) => r.startsWith("HEAD"));
@@ -533,7 +557,7 @@ export function GitMain() {
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] leading-[18px] text-text">{c.subject}</span>
                   <span className="mt-[3px] block truncate text-[11.5px] text-faint">
-                    {c.authorName} · {timeAgo(c.date)} · <span className="font-mono">{c.shortHash}</span>
+                    {c.authorName} · {timeAgo(c.date)} · <span className="font-mono">{c.shortHash}</span> <SignatureBadge commit={c} />
                   </span>
                   {refs && (
                     <span className="mt-[5px] inline-block max-w-full truncate rounded bg-accent-soft px-1.5 py-px text-[11px] font-medium text-accent-text-2">
@@ -702,22 +726,24 @@ function FileDetail({
       </div>
 
       {file.conflicted && (
-        <div className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-[10px] border border-warn/30 bg-warn/8 px-3.5 py-2.5 text-[13px]">
-          <span className="min-w-0 flex-1 text-muted">Both sides changed this file. Pick a version, or fix the file and mark it resolved.</span>
-          <button type="button" className="btn h-8" onClick={() => onResolve("ours")}>
-            Keep mine
-          </button>
-          <button type="button" className="btn h-8" onClick={() => onResolve("theirs")}>
-            Take theirs
-          </button>
-          <button type="button" className="btn h-8" onClick={() => onResolve("resolved")} title="I fixed the file by hand">
-            Mark resolved
-          </button>
-        </div>
+        <ConflictEditor
+          workspaceId={workspaceId}
+          path={file.path}
+          fallback={
+            <>
+              <ConflictChoices onResolve={onResolve} />
+              {data && (
+                <div className="mx-4 mb-4 min-h-0 flex-1 overflow-auto rounded-[10px] border border-border-mid bg-sunken">
+                  <RawDiff diff={data.diff} />
+                </div>
+              )}
+            </>
+          }
+        />
       )}
 
       {error && <p className="mx-4 rounded-lg bg-danger-soft p-3 text-[13px] text-danger">{error}</p>}
-      {!data && !error && (
+      {!data && !error && !file.conflicted && (
         <div className="flex flex-1 items-center justify-center text-faint">
           <Loader2 size={16} className="animate-spin" />
         </div>
@@ -730,7 +756,38 @@ function FileDetail({
               ? `Only formatting changed in ${label.name}`
               : `${semantic.length} ${semantic.length === 1 ? "change" : "changes"} in ${label.name} · ${staged ? "staged" : "not staged"}`}
           </div>
-          {semantic.length > 0 && (
+          {semantic.length > 0 && <SemanticChanges changes={semantic} />}
+        </div>
+      )}
+
+      {data && !showPretty && !file.conflicted && (
+        <div className="mx-4 mb-4 min-h-0 flex-1 overflow-auto rounded-[10px] border border-border-mid bg-sunken">
+          <RawDiff diff={data.diff} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function ConflictChoices({ onResolve }: { onResolve: (how: "ours" | "theirs" | "resolved") => void }) {
+  return (
+        <div className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-[10px] border border-warn/30 bg-warn/8 px-3.5 py-2.5 text-[13px]">
+          <span className="min-w-0 flex-1 text-muted">Both sides changed this file. Pick a version, or fix the file and mark it resolved.</span>
+          <button type="button" className="btn h-8" onClick={() => onResolve("ours")}>
+            Keep mine
+          </button>
+          <button type="button" className="btn h-8" onClick={() => onResolve("theirs")}>
+            Take theirs
+          </button>
+          <button type="button" className="btn h-8" onClick={() => onResolve("resolved")} title="I fixed the file by hand">
+            Mark resolved
+          </button>
+        </div>
+  );
+}
+
+function SemanticChanges({ changes: semantic }: { changes: SemanticChange[] }) {
+  return (
             <div className="overflow-hidden rounded-[10px] border border-border-mid">
               {semantic.map((c, i) => (
                 <div key={i} className="border-b border-border px-3.5 py-3 last:border-b-0">
@@ -755,20 +812,10 @@ function FileDetail({
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
-
-      {data && !showPretty && (
-        <div className="mx-4 mb-4 min-h-0 flex-1 overflow-auto rounded-[10px] border border-border-mid bg-sunken">
-          <RawDiff diff={data.diff} />
-        </div>
-      )}
-    </>
   );
 }
 
-function CommitDetail({ workspaceId, commit }: { workspaceId: string; commit: Commit }) {
+function CommitDetail({ workspaceId, commit, current, busy }: { workspaceId: string; commit: Commit; current: string; busy: boolean }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -782,15 +829,38 @@ function CommitDetail({ workspaceId, commit }: { workspaceId: string; commit: Co
     };
   }, [workspaceId, commit.hash]);
   const files = diff ? (diff.match(/^diff --git /gm) ?? []).length : 0;
+  const actions = commitActions(commit, current);
+  const isHead = commit.refs.some((r) => r.startsWith("HEAD"));
   return (
     <>
-      <div className="shrink-0 px-4 pt-3 pb-2.5">
-        <div className="text-[15px] font-semibold tracking-[-0.01em]">{commit.subject}</div>
-        <div className="mt-[3px] text-[12px] text-faint">
-          {commit.authorName} · {new Date(commit.date * 1000).toLocaleString()} · <span className="font-mono">{commit.shortHash}</span>
-          {diff && ` · ${files} ${files === 1 ? "file" : "files"}`}
-          {commit.parents.length > 1 && " · merge commit"}
+      <div className="flex shrink-0 items-start gap-1.5 px-4 pt-3 pb-2.5">
+        <div className="min-w-0 flex-1">
+          <div className="text-[15px] font-semibold tracking-[-0.01em]">{commit.subject}</div>
+          <div className="mt-[3px] text-[12px] text-faint">
+            {commit.authorName} · {new Date(commit.date * 1000).toLocaleString()} · <span className="font-mono">{commit.shortHash}</span>
+            {diff && ` · ${files} ${files === 1 ? "file" : "files"}`}
+            {commit.parents.length > 1 && " · merge commit"}
+          </div>
+          {commit.signatureStatus && (
+            <div className="mt-1 text-[12px] text-faint">
+              <SignatureBadge commit={commit} withLabel />
+              {commit.signer && <span> · signed by {commit.signer}</span>}
+            </div>
+          )}
         </div>
+        <ToolbarButton disabled={busy || isHead} onClick={() => void actions.cherryPick()} title={isHead ? "Already on this branch" : `Apply this commit on top of ${current}`}>
+          Cherry-pick
+        </ToolbarButton>
+        <ToolbarButton
+          disabled={busy || commit.parents.length > 1}
+          onClick={() => void actions.revert()}
+          title={commit.parents.length > 1 ? "Merge commits can't be reverted here" : "Undo this commit with a new one"}
+        >
+          Revert
+        </ToolbarButton>
+        <ToolbarButton disabled={busy} onClick={actions.tag} title="Tag this commit">
+          Tag
+        </ToolbarButton>
       </div>
       {error && <p className="mx-4 rounded-lg bg-danger-soft p-3 text-[13px] text-danger">{error}</p>}
       {diff === null && !error ? (

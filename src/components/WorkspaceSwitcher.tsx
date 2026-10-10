@@ -128,6 +128,7 @@ export function WorkspaceSwitcher({ onClose }: { onClose: () => void }) {
         svg(<path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.8.8M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.8-.8" />),
         () => showWorkspaceDialog("clone"),
       )}
+      {action("Join with an onboarding link", svg(<path d="M3 8h7.5M7.5 5 10.5 8l-3 3M13 3v10" />), () => showWorkspaceDialog("join"))}
       {action("Open a folder", svg(<path d="M2 4.4A1.5 1.5 0 0 1 3.5 2.9h2.4L7.2 4.4h5.3a1.5 1.5 0 0 1 1.5 1.5v5.8a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.7z" />), () =>
         showWorkspaceDialog("open"),
       )}

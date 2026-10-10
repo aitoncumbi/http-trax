@@ -16,6 +16,7 @@ path = "src/bin/courion-mcp.rs"
 
 [dependencies]
 trax-core.workspace = true
+trax-git.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -93,15 +93,15 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 
 ## Phase 2 — Teams and git, deeper
 
-- [ ] Semantic 3-way merge for request files (field-level merge of headers, params, scripts) with an in-app conflict editor
-- [ ] Pull requests through the GitHub and GitLab APIs: create, list, review comments on requests, approve, merge
-- [ ] Inline review comments mapped to requests and fields
-- [ ] Secrets in the OS keychain (Windows Credential Manager, Secret Service/libsecret) and pluggable vaults (1Password, HashiCorp Vault, Azure Key Vault)
-- [ ] Stash, cherry-pick, revert and tag support
-- [ ] Notifications when teammates' changes arrive (with a summary of changed requests)
-- [ ] Workspace templates and team onboarding links (clone + environment setup in one step)
-- [ ] Sparse checkout for workspaces inside large monorepos
-- [ ] Commit signing status and per-team signing settings
+- [x] Semantic 3-way merge for request files (field-level merge of headers, params, scripts) with an in-app conflict editor; also environments, collections and folders; MCP `semantic_merge_file`
+- [x] Pull requests through the GitHub and GitLab APIs: create, list, review comments on requests, approve, merge (PRs tab in Source control, PR actions in the review tab); MCP tools for each
+- [x] Inline review comments mapped to requests and fields (`headers.Authorization`, `scripts.postResponse`…), anchored to the PR's head commit on GitHub and shown on the request itself
+- [x] Secrets in the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service/libsecret via `secret-tool`) and pluggable vaults (1Password `op://`, HashiCorp Vault `vault://`, Azure Key Vault `azkv://`) referenced from shared environments
+- [x] Stash, cherry-pick, revert and tag support
+- [x] Notifications when teammates' changes arrive (with a summary of changed requests)
+- [x] Workspace templates and team onboarding links (clone + environment setup in one step); MCP `list_workspace_templates`, `create_onboarding_link`, `init_workspace` with a template or link
+- [x] Sparse checkout for workspaces inside large monorepos (on clone, onboarding, and in Settings)
+- [x] Commit signing status and per-team signing settings (GPG, SSH, X.509; per repository)
 
 ## Phase 3 — Automation and AI
 

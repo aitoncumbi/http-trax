@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, FolderOpen, GitBranch, Import, Plus } from "lucide-react";
+import { Bot, FolderOpen, GitBranch, Import, Link2, Plus } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { useStore } from "@/lib/store";
@@ -67,6 +67,9 @@ export function NoWorkspace() {
           </button>
           <button type="button" className="btn h-9 px-3.5" onClick={() => show("clone")}>
             <GitBranch size={14} /> Clone
+          </button>
+          <button type="button" className="btn h-9 px-3.5" onClick={() => show("join")}>
+            <Link2 size={14} /> Join with a link
           </button>
         </div>
       </div>

@@ -18,6 +18,7 @@ import type { Identity, Remote, SyncSettings, Variable, WorkspaceManifest } from
 import { cx } from "@/lib/util";
 
 import { KeyValueEditor, makeVar } from "../editors/KeyValueEditor";
+import { OnboardingLinkForm, PullRequestSettingsForm, SigningSettingsForm, SparseCheckoutForm, VaultSettingsForm } from "./TeamSettings";
 
 export const SETTINGS_SECTIONS = [
   { id: "appearance", title: "Appearance" },
@@ -26,6 +27,11 @@ export const SETTINGS_SECTIONS = [
   { id: "sync", title: "Background sync (this machine)" },
   { id: "identity", title: "Git identity for this repository" },
   { id: "remotes", title: "Remotes" },
+  { id: "onboarding", title: "Team onboarding link" },
+  { id: "pulls", title: "Pull requests (GitHub, GitLab)" },
+  { id: "secrets", title: "Secrets and vaults" },
+  { id: "signing", title: "Commit signing" },
+  { id: "sparse", title: "Sparse checkout" },
   { id: "about", title: "About" },
 ] as const;
 
@@ -56,6 +62,21 @@ export function SettingsView() {
       <ManifestForm key={JSON.stringify(tree.manifest)} workspaceId={entry.id} manifest={tree.manifest} root={tree.root} />
       <SyncForm key={`${entry.id}:${JSON.stringify(entry.sync)}`} workspaceId={entry.id} initial={entry.sync} />
       <GitSettings key={entry.id} workspaceId={entry.id} />
+      <Section id="onboarding">
+        <OnboardingLinkForm key={entry.id} workspaceId={entry.id} />
+      </Section>
+      <Section id="pulls">
+        <PullRequestSettingsForm key={entry.id} workspaceId={entry.id} />
+      </Section>
+      <Section id="secrets">
+        <VaultSettingsForm key={entry.id} workspaceId={entry.id} />
+      </Section>
+      <Section id="signing">
+        <SigningSettingsForm key={entry.id} workspaceId={entry.id} />
+      </Section>
+      <Section id="sparse">
+        <SparseCheckoutForm key={entry.id} workspaceId={entry.id} />
+      </Section>
       <Section id="about">
         <p className="text-[13px] text-muted">Courion (http-trax) {info?.version}</p>
         <p className="text-[13px] text-muted">{info?.gitVersion ?? "git not found. Install git to sync with your team."}</p>
