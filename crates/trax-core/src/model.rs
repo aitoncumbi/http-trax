@@ -163,6 +163,37 @@ pub enum Auth {
         #[serde(default)]
         password: String,
     },
+    Digest {
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        password: String,
+    },
+    #[serde(rename = "aws-sigv4")]
+    AwsSigV4 {
+        #[serde(default, alias = "accessKey")]
+        access_key: String,
+        #[serde(default, alias = "secretKey")]
+        secret_key: String,
+        #[serde(default)]
+        region: String,
+        #[serde(default)]
+        service: String,
+        #[serde(
+            default,
+            alias = "sessionToken",
+            skip_serializing_if = "String::is_empty"
+        )]
+        session_token: String,
+    },
+    Ntlm {
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        password: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        domain: String,
+    },
     ApiKey {
         #[serde(default)]
         key: String,
@@ -200,6 +231,8 @@ pub enum OAuth2ClientAuth {
     Basic,
     /// `client_id` and `client_secret` form fields (client_secret_post).
     Body,
+    /// `client_assertion` signed JWT (RFC 7523 `private_key_jwt`).
+    PrivateKeyJwt,
 }
 
 impl OAuth2ClientAuth {
@@ -242,6 +275,15 @@ pub struct OAuth2 {
     pub password: String,
     #[serde(default, skip_serializing_if = "OAuth2ClientAuth::is_default")]
     pub client_auth: OAuth2ClientAuth,
+    /// PEM-encoded RSA private key (or HMAC secret) for `private_key_jwt`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub private_key_pem: String,
+    /// Optional `kid` header in `private_key_jwt` assertions.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key_id: String,
+    /// Optional RFC 7662 token introspection endpoint.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub introspection_url: String,
     /// Extra parameters for the authorization and token requests
     /// (`audience`, `resource`, …).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -266,6 +308,9 @@ impl OAuth2 {
             username: String::new(),
             password: String::new(),
             client_auth: OAuth2ClientAuth::Basic,
+            private_key_pem: String::new(),
+            key_id: String::new(),
+            introspection_url: String::new(),
             extra_params: Vec::new(),
             header_prefix: String::new(),
         }
@@ -324,6 +369,18 @@ pub struct RequestSettings {
     /// response sets.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub cookies: bool,
+    /// Optional HTTP/HTTPS/SOCKS5 proxy URL (e.g. `http://127.0.0.1:8080`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
+    /// Optional custom CA certificate (PEM text or path to PEM file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_cert: Option<String>,
+    /// Optional client certificate for mTLS (PEM text or path to PEM file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_cert: Option<String>,
+    /// Optional client private key for mTLS (PEM text or path to PEM file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<String>,
 }
 
 impl Default for RequestSettings {
@@ -333,6 +390,10 @@ impl Default for RequestSettings {
             follow_redirects: true,
             verify_tls: true,
             cookies: true,
+            proxy_url: None,
+            ca_cert: None,
+            client_cert: None,
+            client_key: None,
         }
     }
 }
@@ -501,6 +562,7 @@ pub struct GroupNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[allow(clippy::large_enum_variant)]
 pub enum TreeItem {
     Folder(GroupNode),
     Request(RequestSummary),

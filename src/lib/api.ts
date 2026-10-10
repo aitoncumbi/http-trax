@@ -95,6 +95,8 @@ export const api = {
     call<Request>("duplicate_request", { workspaceId, id }),
   moveRequest: (workspaceId: string, id: string, parentId: string) =>
     call<void>("move_request", { workspaceId, id, parentId }),
+  moveItem: (workspaceId: string, itemId: string, targetParentId: string | null, beforeId: string | null) =>
+    call<void>("move_item", { workspaceId, itemId, targetParentId, beforeId }),
 
   // environments & variables
   saveEnvironment: (workspaceId: string, environment: Environment) =>
@@ -136,6 +138,8 @@ export const api = {
     call<OAuthToken>("oauth_refresh_token", { workspaceId, request, parentId, environmentId }),
   oauthClearToken: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
     call<boolean>("oauth_clear_token", { workspaceId, request, parentId, environmentId }),
+  oauthIntrospectToken: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
+    call<Record<string, unknown>>("oauth_introspect_token", { workspaceId, request, parentId, environmentId }),
 
   // cookie jar
   listCookies: (workspaceId: string) => call<CookieInfo[]>("list_cookies", { workspaceId }),
@@ -157,6 +161,8 @@ export const api = {
   // history
   getHistory: (workspaceId: string) => call<HistoryEntry[]>("get_history", { workspaceId }),
   clearHistory: (workspaceId: string) => call<void>("clear_history", { workspaceId }),
+  restoreHistoryEntry: (workspaceId: string, entryId: string, parentId: string | null) =>
+    call<Request>("restore_history_entry", { workspaceId, entryId, parentId }),
 
   // git
   gitFileChanges: (workspaceId: string, path: string, staged: boolean) =>

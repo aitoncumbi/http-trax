@@ -10,7 +10,7 @@ import { cx, envTone, timeAgo } from "@/lib/util";
 import { useAgents } from "../agents/agentsStore";
 import { Switch } from "../ui/Controls";
 
-/** Tools `trax-mcp` offers (see crates/trax-mcp/src/tools.rs). */
+/** Tools `courion-mcp` (`trax-mcp`) offers (see crates/trax-mcp/src/tools.rs). */
 const TOOLS = [
   "list_workspaces",
   "init_workspace",
@@ -19,12 +19,15 @@ const TOOLS = [
   "upsert_collection",
   "upsert_request",
   "delete_request",
+  "move_item",
   "run_request",
   "run_collection",
   "send_http_request",
   "list_environments",
   "upsert_environment",
   "list_saved_responses",
+  "list_history",
+  "restore_history_entry",
 ];
 
 const PERMISSIONS: { key: keyof AgentPermissions; label: string; desc: string }[] = [
@@ -117,17 +120,17 @@ export function AgentsView() {
     return () => clearInterval(t);
   }, [workspaceId, gitEpoch, load]);
 
-  const command = info?.mcpCommand ?? "trax-mcp";
+  const command = info?.mcpCommand ?? "courion-mcp";
   const quote = (s: string) => (/[\s"]/.test(s) ? JSON.stringify(s) : s);
   const wsPath = entry?.path ?? "./api-tests";
   const tab = TABS.find((t) => t.id === client) ?? TABS[0];
   const snippet =
     tab.id === "code"
-      ? `claude mcp add http-trax -- ${quote(command)} --workspace ${quote(wsPath)}`
+      ? `claude mcp add courion -- ${quote(command)} --workspace ${quote(wsPath)}`
       : JSON.stringify(
           tab.id === "desktop"
-            ? { mcpServers: { "http-trax": { command, args: ["--workspace", wsPath] } } }
-            : { servers: { "http-trax": { type: "stdio", command, args: ["--workspace", wsPath] } } },
+            ? { mcpServers: { courion: { command, args: ["--workspace", wsPath] } } }
+            : { servers: { courion: { type: "stdio", command, args: ["--workspace", wsPath] } } },
           null,
           2,
         );
@@ -155,7 +158,7 @@ export function AgentsView() {
         </p>
         {!info?.mcpCommand && (
           <p className="mt-3 rounded-lg bg-warn/10 px-3 py-2 text-[12.5px] text-warn">
-            The bundled <span className="font-mono">trax-mcp</span> binary wasn&apos;t found next to the app. Build it with{" "}
+            The bundled <span className="font-mono">courion-mcp</span> binary wasn&apos;t found next to the app. Build it with{" "}
             <span className="font-mono">cargo build -p trax-mcp --release</span> and put it on your PATH.
           </p>
         )}
@@ -178,7 +181,7 @@ export function AgentsView() {
           <pre className="overflow-x-auto px-4 py-3.5 font-mono text-[13px] leading-[21px] text-text">
             {tab.id === "code" ? (
               <>
-                <span className="text-key">claude</span> mcp add http-trax -- <span className="text-[var(--syn-str)]">{quote(command)}</span> --workspace{" "}
+                <span className="text-key">claude</span> mcp add courion -- <span className="text-[var(--syn-str)]">{quote(command)}</span> --workspace{" "}
                 <span className="text-[var(--syn-str)]">{quote(wsPath)}</span>
               </>
             ) : (

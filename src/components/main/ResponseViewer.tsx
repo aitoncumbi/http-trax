@@ -7,6 +7,7 @@ import { useMemo, useRef, useState } from "react";
 
 import { errorMessage, saveToFile } from "@/lib/api";
 import { expiryLabel, hostOf, parseCookieHeader, parseSetCookie } from "@/lib/cookies";
+import { jmesPath, JmesPathError } from "@/lib/jmespath";
 import { jsonPath, JsonPathError } from "@/lib/jsonpath";
 import { useStore, type RequestTab } from "@/lib/store";
 import type { ResponseData, SentRequest } from "@/lib/types";
@@ -16,6 +17,7 @@ import { CodeEditor, type CodeLanguage } from "../editors/CodeEditor";
 import { Pills, TabStrip } from "../ui/Segmented";
 
 type Section = "body" | "headers" | "cookies" | "tests" | "console" | "request" | "saved";
+type QueryLang = "jsonpath" | "jmespath";
 
 function contentType(r: ResponseData): string {
   return r.headers.find((h) => h.key.toLowerCase() === "content-type")?.value ?? "";
@@ -113,9 +115,49 @@ function HtmlPreview({ html, url }: { html: string; url: string }) {
   );
 }
 
-/** Bodies larger than this skip formatting and highlighting. */
-const LARGE_BODY = 1_500_000;
+/** Bodies larger than this use virtualized line rendering instead of full CodeMirror highlighting. */
+const LARGE_BODY = 500_000;
+const VIRTUAL_ROW_HEIGHT = 20;
+const VIRTUAL_OVERSCAN = 20;
 const WRAP_KEY = "http-trax.response-wrap";
+
+function VirtualizedBody({ text, lineNumbers }: { text: string; lineNumbers: boolean }) {
+  const lines = useMemo(() => text.split(/\r?\n/), [text]);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(480);
+  const totalHeight = lines.length * VIRTUAL_ROW_HEIGHT;
+  const startIdx = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+  const endIdx = Math.min(lines.length, Math.ceil((scrollTop + viewportHeight) / VIRTUAL_ROW_HEIGHT) + VIRTUAL_OVERSCAN);
+  const visible = lines.slice(startIdx, endIdx);
+
+  return (
+    <div
+      className="min-h-0 flex-1 overflow-auto px-4 py-2 font-mono text-[12.5px] leading-[20px]"
+      onScroll={(e) => {
+        setScrollTop(e.currentTarget.scrollTop);
+        setViewportHeight(e.currentTarget.clientHeight);
+      }}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        <div style={{ transform: `translateY(${startIdx * VIRTUAL_ROW_HEIGHT}px)` }}>
+          {visible.map((line, idx) => {
+            const lineNo = startIdx + idx + 1;
+            return (
+              <div key={lineNo} className="flex h-[20px] items-baseline whitespace-pre">
+                {lineNumbers && (
+                  <span className="mr-4 inline-block w-12 shrink-0 text-right text-[11.5px] text-faint select-none">
+                    {lineNo}
+                  </span>
+                )}
+                <span className="text-text">{line}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const EXTENSIONS: [RegExp, string][] = [
   [/json/, "json"],
@@ -192,6 +234,7 @@ function BodyView({ response }: { response: ResponseData }) {
     }
   });
   const [filter, setFilter] = useState<string | null>(null);
+  const [queryLang, setQueryLang] = useState<QueryLang>("jsonpath");
   const editor = useRef<ReactCodeMirrorRef>(null);
   const body = response.body;
   const large = body.length > LARGE_BODY;
@@ -207,12 +250,17 @@ function BodyView({ response }: { response: ResponseData }) {
   const filtered = useMemo((): { text: string; count: number } | { error: string } | null => {
     if (filter === null || !filter.trim() || !parsed) return null;
     try {
+      if (queryLang === "jmespath") {
+        const res = jmesPath(parsed.value, filter);
+        const count = res === null || res === undefined ? 0 : Array.isArray(res) ? res.length : 1;
+        return { text: JSON.stringify(res, null, 2) ?? "null", count };
+      }
       const hits = jsonPath(parsed.value, filter);
       return { text: JSON.stringify(hits.length === 1 ? hits[0] : hits, null, 2), count: hits.length };
     } catch (e) {
-      return { error: e instanceof JsonPathError ? e.message : String(e) };
+      return { error: e instanceof JsonPathError || e instanceof JmesPathError ? e.message : String(e) };
     }
-  }, [filter, parsed]);
+  }, [filter, parsed, queryLang]);
 
   const setWrap = (on: boolean) => {
     setWrapState(on);
@@ -296,6 +344,14 @@ function BodyView({ response }: { response: ResponseData }) {
       </div>
       {filter !== null && (
         <div className="flex shrink-0 items-center gap-2.5 px-5 pt-1 pb-1.5">
+          <Pills<QueryLang>
+            options={[
+              { id: "jsonpath", label: "JSONPath" },
+              { id: "jmespath", label: "JMESPath" },
+            ]}
+            value={queryLang}
+            onChange={setQueryLang}
+          />
           <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border-strong px-2.5 focus-within:border-accent-line">
             <span className="sr-only">JSONPath filter</span>
             <ListFilter size={13} className="shrink-0 text-faint" />
@@ -309,24 +365,38 @@ function BodyView({ response }: { response: ResponseData }) {
                   setFilter(null);
                 }
               }}
-              placeholder="$.data[*].id  or  $..items[?(@.price < 10)]"
+              placeholder={
+                queryLang === "jmespath"
+                  ? "data[*].id  or  items[?price < `10`].name"
+                  : "$.data[*].id  or  $..items[?(@.price < 10)]"
+              }
               spellCheck={false}
               className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] outline-none placeholder:text-faint"
             />
           </label>
           <span className={cx("shrink-0 text-[12px]", filtered && "error" in filtered ? "text-danger" : "text-faint")}>
-            {!filtered ? (parsed ? "Type a JSONPath" : "Not valid JSON") : "error" in filtered ? filtered.error : `${filtered.count} ${filtered.count === 1 ? "match" : "matches"}`}
+            {!filtered
+              ? parsed
+                ? queryLang === "jmespath"
+                  ? "Type a JMESPath"
+                  : "Type a JSONPath"
+                : "Not valid JSON"
+              : "error" in filtered
+                ? filtered.error
+                : `${filtered.count} ${filtered.count === 1 ? "match" : "matches"}`}
           </span>
         </div>
       )}
       {large && mode !== "preview" && (
         <div className="mx-5 mb-1 rounded-lg bg-warn/10 px-3 py-1.5 text-[12.5px] text-warn">
-          Large response ({formatSize(response.size)}): formatting and highlighting are off. Save it to inspect it elsewhere.
+          Large response ({formatSize(response.size)}): virtualized rendering is active; formatting and highlighting are off.
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {mode === "preview" ? (
           <HtmlPreview html={body} url={response.url} />
+        ) : large && !(filtered && "text" in filtered) ? (
+          <VirtualizedBody text={body} lineNumbers={mode === "pretty"} />
         ) : mode === "pretty" ? (
           <CodeEditor ref={editor} value={shown} language={filtered && "text" in filtered ? "json" : lang} readOnly wrap={wrap} />
         ) : (

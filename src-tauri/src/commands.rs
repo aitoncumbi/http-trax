@@ -24,17 +24,22 @@ pub struct AppInfo {
 fn find_mcp_binary() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let name = if cfg!(windows) {
-        "trax-mcp.exe"
+    let names = if cfg!(windows) {
+        ["courion-mcp.exe", "trax-mcp.exe"]
     } else {
-        "trax-mcp"
+        ["courion-mcp", "trax-mcp"]
     };
-    let candidates = [
-        dir.join(name),
-        // `tauri dev` runs from target/debug where cargo also puts trax-mcp.
-        dir.join("..").join("debug").join(name),
-    ];
-    candidates.into_iter().find(|p| p.is_file())
+    for name in names {
+        let candidates = [
+            dir.join(name),
+            // `tauri dev` runs from target/debug where cargo also puts the MCP binary.
+            dir.join("..").join("debug").join(name),
+        ];
+        if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -370,6 +375,20 @@ pub async fn move_request(
         .str_err()
 }
 
+#[tauri::command]
+pub async fn move_item(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    item_id: String,
+    target_parent_id: Option<String>,
+    before_id: Option<String>,
+) -> CmdResult<()> {
+    state
+        .workspace(&workspace_id)?
+        .move_item(&item_id, target_parent_id.as_deref(), before_id.as_deref())
+        .str_err()
+}
+
 // ------------------------------------------------------------ environments
 
 #[tauri::command]
@@ -672,4 +691,17 @@ pub async fn get_history(
 #[tauri::command]
 pub async fn clear_history(state: State<'_, AppState>, workspace_id: String) -> CmdResult<()> {
     state.workspace(&workspace_id)?.clear_history().str_err()
+}
+
+#[tauri::command]
+pub async fn restore_history_entry(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    entry_id: String,
+    parent_id: Option<String>,
+) -> CmdResult<Request> {
+    state
+        .workspace(&workspace_id)?
+        .restore_history_entry(&entry_id, parent_id.as_deref())
+        .str_err()
 }

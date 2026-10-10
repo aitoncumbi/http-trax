@@ -695,12 +695,12 @@ function __traxRun(source) {
   var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   var fn;
   try {
-    fn = new AsyncFunction("trax", "pm", "console", "expect", "btoa", "atob", source);
+    fn = new AsyncFunction("trax", "courion", "pm", "console", "expect", "btoa", "atob", source);
   } catch (e) {
     state.error = (e && e.name ? e.name + ": " : "") + (e && e.message !== undefined ? e.message : String(e));
     return;
   }
-  fn(state.trax, state.pm, state.console, state.expect, state.btoa, state.atob)
+  fn(state.trax, state.trax, state.pm, state.console, state.expect, state.btoa, state.atob)
     .then(function () {
       return Promise.all(state.pending);
     })

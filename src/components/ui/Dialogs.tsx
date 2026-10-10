@@ -294,7 +294,7 @@ function groupOptions(collections: GroupNode[]): { id: string; label: string }[]
   return out;
 }
 
-function PostmanImport({ close }: { close: () => void }) {
+function SpecImport({ close }: { close: () => void }) {
   const workspaceId = useStore((s) => s.activeWorkspaceId);
   const { reloadTree, bumpGit, toast, setView } = useStore.getState();
   const [text, setText] = useState("");
@@ -327,13 +327,12 @@ function PostmanImport({ close }: { close: () => void }) {
       }}
     >
       <p className="text-[13px] leading-[19px] text-muted">
-        Export a collection (v2.1) or an environment from Postman, then pick the file or paste its JSON. Scripts keep working: the{" "}
-        <span className="font-mono text-[12px]">pm.*</span> API is supported.
+        Import an OpenAPI 3 / Swagger spec (YAML or JSON), Postman collection or environment (v2.1), HAR archive, Insomnia export, or Bruno collection. Pick a file or paste its contents.
       </p>
       <label className="flex h-[72px] cursor-pointer items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong text-[13.5px] text-text-2 hover:bg-hover">
         <input
           type="file"
-          accept=".json,application/json"
+          accept=".json,.yaml,.yml,.har,application/json,text/yaml,text/x-yaml,application/x-yaml"
           className="sr-only"
           onChange={async (e) => {
             const f = e.target.files?.[0];
@@ -342,21 +341,21 @@ function PostmanImport({ close }: { close: () => void }) {
             setText(await f.text());
           }}
         />
-        {file ? <span className="font-mono text-[12.5px]">{file}</span> : "Choose a .json export"}
+        {file ? <span className="font-mono text-[12.5px]">{file}</span> : "Choose a file (.json, .yaml, .yml, .har)"}
       </label>
       <div>
-        <label htmlFor="postman-json" className="label">
-          Or paste JSON
+        <label htmlFor="spec-content" className="label">
+          Or paste JSON / YAML
         </label>
         <textarea
-          id="postman-json"
+          id="spec-content"
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             setFile(null);
           }}
           spellCheck={false}
-          placeholder='{ "info": { "name": "Orders API", ... }, "item": [ ... ] }'
+          placeholder='{"openapi": "3.0.0", ...} or {"info": {"name": "Orders API"}, "item": [...]}'
           className="input h-28 resize-none py-2.5 font-mono text-[12.5px] leading-[19px]"
         />
       </div>
@@ -384,11 +383,11 @@ function ImportDialog({ initialTab }: { initialTab?: "curl" | "postman" }) {
             cURL command
           </button>
           <button type="button" aria-pressed={tab === "postman"} onClick={() => setTab("postman")}>
-            Postman export
+            File / Spec (OpenAPI, Postman, HAR…)
           </button>
         </div>
       </div>
-      {tab === "curl" ? <CurlImport close={close} /> : <PostmanImport close={close} />}
+      {tab === "curl" ? <CurlImport close={close} /> : <SpecImport close={close} />}
     </Modal>
   );
 }

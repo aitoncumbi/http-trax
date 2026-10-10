@@ -440,4 +440,25 @@ mod tests {
             Some(&Some("env-{{missing}}".into()))
         );
     }
+
+    #[test]
+    fn courion_alias_matches_trax_api() {
+        let script = r#"
+            courion.env.set("token", "courion-secret");
+            courion.vars.set("reqId", courion.uuid());
+            courion.test("courion alias works", () => {
+                courion.expect(courion.response.status).toBe(200);
+                courion.expect(courion.response.json().ok).toBe(true);
+            });
+        "#;
+        let out = run(script, &post(200, r#"{"ok":true}"#)).unwrap();
+        assert_eq!(out.error, None);
+        assert_eq!(out.tests.len(), 1);
+        assert!(out.tests[0].passed);
+        assert_eq!(
+            out.environment_changes.get("token"),
+            Some(&Some("courion-secret".into()))
+        );
+        assert!(out.variable_changes.contains_key("reqId"));
+    }
 }

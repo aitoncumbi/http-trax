@@ -588,11 +588,14 @@ type Args = Record<string, unknown>;
 const s = (a: Args, k: string) => a[k] as string;
 
 /** A small subset of the Rust importer, enough for the browser preview. */
-function importPostman(w: MockWorkspace, json: string) {
+function importSpecMock(w: MockWorkspace, raw: string) {
   let v: Record<string, unknown>;
   try {
-    v = JSON.parse(json);
+    v = JSON.parse(raw);
   } catch (e) {
+    if (raw.trim().startsWith("openapi:") || raw.trim().startsWith("swagger:")) {
+      throw new Error("YAML parsing is supported in the desktop app. In the browser preview, please use JSON.");
+    }
     throw new Error(`not valid JSON: ${(e as Error).message}`);
   }
   const summary = { collections: [] as string[], environments: [] as string[], requests: 0, warnings: [] as string[] };
@@ -606,6 +609,7 @@ function importPostman(w: MockWorkspace, json: string) {
       summary.requests++;
       return r(req(it.name || "Untitled request", method, url.split("?")[0]));
     });
+
   if (v.info && Array.isArray(v.item)) {
     const info = v.info as { name?: string };
     const c = group(info.name || "Imported collection", toItems(v.item as PmItem[]), { seq: w.collections.length + 1 });
@@ -622,8 +626,95 @@ function importPostman(w: MockWorkspace, json: string) {
       shared: true,
     });
     summary.environments.push(name);
+  } else if (typeof v.openapi === "string" || typeof v.swagger === "string") {
+    const info = (v.info ?? {}) as { title?: string; version?: string };
+    const paths = (v.paths ?? {}) as Record<string, Record<string, unknown>>;
+    const servers = Array.isArray(v.servers) ? (v.servers as { url?: string }[]) : [];
+    const basePath = servers[0]?.url || (typeof v.basePath === "string" ? v.basePath : "");
+    const items: MockItem[] = [];
+    const methods = ["get", "post", "put", "delete", "patch", "options", "head"];
+    for (const [pathStr, pathObj] of Object.entries(paths)) {
+      if (!pathObj || typeof pathObj !== "object") continue;
+      for (const m of methods) {
+        const op = pathObj[m] as { summary?: string; operationId?: string } | undefined;
+        if (!op) continue;
+        const name = op.summary || op.operationId || `${m.toUpperCase()} ${pathStr}`;
+        const urlPath = pathStr.replace(/\{([^}]+)\}/g, "{{$1}}");
+        const fullUrl = basePath.endsWith("/") && urlPath.startsWith("/") ? basePath + urlPath.slice(1) : basePath + urlPath;
+        summary.requests++;
+        items.push(r(req(name, m.toUpperCase(), fullUrl)));
+      }
+    }
+    const c = group(info.title || "OpenAPI Specification", items, { seq: w.collections.length + 1 });
+    w.collections.push(c);
+    summary.collections.push(c.meta.id);
+  } else if (v.log && typeof v.log === "object" && Array.isArray((v.log as { entries?: unknown[] }).entries)) {
+    const entries = (v.log as { entries: { request?: { method?: string; url?: string } }[] }).entries;
+    const items: MockItem[] = [];
+    for (const entry of entries) {
+      const rq = entry.request;
+      if (!rq?.url) continue;
+      const method = (rq.method || "GET").toUpperCase();
+      let name: string;
+      try {
+        const parsed = new URL(rq.url);
+        name = `${method} ${parsed.pathname}`;
+      } catch {
+        name = `${method} ${rq.url}`;
+      }
+      summary.requests++;
+      items.push(r(req(name, method, rq.url.split("?")[0])));
+    }
+    const c = group("HAR Import", items, { seq: w.collections.length + 1 });
+    w.collections.push(c);
+    summary.collections.push(c.meta.id);
+  } else if (v.__export_format === 4 || (Array.isArray(v.resources) && (v.resources as { _type?: string }[]).some((r) => r._type === "request"))) {
+    const resources = v.resources as { _type?: string; name?: string; method?: string; url?: string; data?: Record<string, unknown> }[];
+    const items: MockItem[] = [];
+    let collName = "Insomnia Import";
+    for (const res of resources) {
+      if (res._type === "workspace" && res.name) {
+        collName = res.name;
+      } else if (res._type === "request") {
+        summary.requests++;
+        items.push(r(req(res.name || "Untitled request", (res.method || "GET").toUpperCase(), res.url || "")));
+      } else if (res._type === "environment" && res.data) {
+        const envName = res.name || "Insomnia Environment";
+        w.environments.push({
+          id: uid(),
+          name: envName,
+          variables: Object.entries(res.data).map(([k, val]) => ({ key: k, value: String(val ?? ""), enabled: true })),
+          overrides: {},
+          shared: true,
+        });
+        summary.environments.push(envName);
+      }
+    }
+    if (items.length > 0) {
+      const c = group(collName, items, { seq: w.collections.length + 1 });
+      w.collections.push(c);
+      summary.collections.push(c.meta.id);
+    }
+  } else if (Array.isArray(v.items) && (typeof v.name === "string" || v.version === "1")) {
+    const collName = (v.name as string) || "Bruno Collection";
+    type BrunoItem = { name?: string; items?: BrunoItem[]; request?: { method?: string; url?: string } };
+    const toBrunoItems = (arr: BrunoItem[]): MockItem[] => {
+      return arr.map((item) => {
+        if (Array.isArray(item.items)) {
+          return f(group(item.name || "Folder", toBrunoItems(item.items)));
+        }
+        const rq = item.request;
+        const method = (rq?.method || "GET").toUpperCase();
+        const url = rq?.url || "";
+        summary.requests++;
+        return r(req(item.name || "Untitled request", method, url.split("?")[0]));
+      });
+    };
+    const c = group(collName, toBrunoItems(v.items as BrunoItem[]), { seq: w.collections.length + 1 });
+    w.collections.push(c);
+    summary.collections.push(c.meta.id);
   } else {
-    throw new Error("this isn't a Postman collection (v2.0 or v2.1) or environment export");
+    throw new Error("unrecognized format: expected OpenAPI 3.x / Swagger, Postman (v2.0/v2.1), HAR, Insomnia, or Bruno export");
   }
   return summary;
 }
@@ -763,7 +854,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     env.shared = !!a.shared;
     return structuredClone(env);
   },
-  import_json: (a) => importPostman(ws(a.workspaceId), s(a, "json")),
+  import_json: (a) => importSpecMock(ws(a.workspaceId), s(a, "json")),
   oauth_token_status: (a) => {
     const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
     const token = oauthTokens.get(oauthKey(s(a, "workspaceId"), o)) ?? null;
@@ -1136,6 +1227,70 @@ const handlers: Record<string, (a: Args) => unknown> = {
   },
   get_history: (a) => structuredClone(ws(a.workspaceId).history),
   clear_history: (a) => void (ws(a.workspaceId).history = []),
+  restore_history_entry: (a) => {
+    const w = ws(a.workspaceId);
+    const entry = w.history.find((h) => h.id === a.entryId);
+    if (!entry) throw new Error("history entry not found");
+    let parent = a.parentId ? findGroup(w, s(a, "parentId"))?.group : w.collections[0];
+    if (!parent) {
+      parent = group("Requests", [], { seq: 1 });
+      w.collections.push(parent);
+    }
+    const created = req(entry.name || `${entry.method} ${entry.url}`, entry.method, entry.url);
+    created.seq = parent.items.length + 1;
+    parent.items.push(r(created));
+    return structuredClone(created);
+  },
+  move_item: (a) => {
+    const w = ws(a.workspaceId);
+    const itemId = s(a, "itemId");
+    const targetParentId = (a.targetParentId as string | null) ?? null;
+    const beforeId = (a.beforeId as string | null) ?? null;
+    if (!targetParentId) {
+      const idx = w.collections.findIndex((c) => c.meta.id === itemId);
+      if (idx < 0) return;
+      const [moved] = w.collections.splice(idx, 1);
+      const bIdx = beforeId ? w.collections.findIndex((c) => c.meta.id === beforeId) : -1;
+      if (bIdx >= 0) w.collections.splice(bIdx, 0, moved);
+      else w.collections.push(moved);
+      w.collections.forEach((c, i) => (c.meta.seq = i + 1));
+      return;
+    }
+    const dest = findGroup(w, targetParentId)?.group;
+    if (!dest) return;
+    let extracted: MockItem | null = null;
+    const removeFrom = (g: MockGroup) => {
+      const idx = g.items.findIndex((it) => (it.kind === "request" ? it.request.id === itemId : it.group.meta.id === itemId));
+      if (idx >= 0) {
+        [extracted] = g.items.splice(idx, 1);
+        return;
+      }
+      g.items.forEach((it) => it.kind === "folder" && removeFrom(it.group));
+    };
+    w.collections.forEach(removeFrom);
+    if (!extracted) return;
+    const bIdx = beforeId
+      ? dest.items.findIndex((it) => (it.kind === "request" ? it.request.id === beforeId : it.group.meta.id === beforeId))
+      : -1;
+    if (bIdx >= 0) dest.items.splice(bIdx, 0, extracted);
+    else dest.items.push(extracted);
+    dest.items.forEach((it, i) => {
+      if (it.kind === "request") it.request.seq = i + 1;
+      else it.group.meta.seq = i + 1;
+    });
+  },
+  oauth_introspect_token: (a) => {
+    const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
+    const token = oauthTokens.get(oauthKey(s(a, "workspaceId"), o));
+    if (!token) throw new Error("no cached access token to introspect");
+    return {
+      active: !token.expiresAt || Date.parse(token.expiresAt) > Date.now(),
+      sub: "ada",
+      client_id: o.clientId,
+      scope: token.scope ?? o.scope ?? "",
+      token_type: token.tokenType,
+    };
+  },
   git_file_changes: (a): FileChanges => {
     const path = s(a, "path");
     const name = path.split("/").pop() ?? path;

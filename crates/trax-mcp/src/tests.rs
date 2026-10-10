@@ -79,7 +79,7 @@ async fn protocol_basics() {
         .rpc("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }))
         .await;
     assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(init["result"]["serverInfo"]["name"], "http-trax");
+    assert_eq!(init["result"]["serverInfo"]["name"], "courion");
     let init = h
         .rpc("initialize", json!({ "protocolVersion": "1999-01-01" }))
         .await;
@@ -497,4 +497,39 @@ async fn oauth2_client_credentials_for_agents() {
         )
         .await;
     assert!(err && text.contains("no access token yet"), "{text}");
+}
+
+#[tokio::test]
+async fn agent_imports_openapi_spec() {
+    let h = Harness::new();
+    let ws_dir = h.repo.path().join("spec-import");
+    h.tool(
+        "init_workspace",
+        json!({ "path": ws_dir.to_string_lossy() }),
+    )
+    .await;
+
+    let spec = r#"
+openapi: 3.0.0
+info:
+  title: Petstore
+  version: 1.0.0
+paths:
+  /pets:
+    get:
+      summary: List pets
+      responses:
+        "200":
+          description: OK
+"#;
+
+    let (text, structured, err) = h.tool("import_spec", json!({ "content": spec })).await;
+    assert!(!err, "{text}");
+    assert!(text.contains("Imported 1 collection(s) and 1 request(s)"));
+    assert_eq!(structured["collections"].as_array().unwrap().len(), 1);
+    assert_eq!(structured["requests"], 1);
+
+    let (ws_text, ws_data, _) = h.tool("get_workspace", json!({})).await;
+    assert!(ws_text.contains("List pets"), "{ws_text}");
+    assert_eq!(ws_data["collections"].as_array().unwrap().len(), 1);
 }

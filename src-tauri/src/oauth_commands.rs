@@ -161,3 +161,21 @@ pub async fn oauth_clear_token(
     )?;
     oauth::clear(&ws, &r.key()).str_err()
 }
+
+#[tauri::command]
+pub async fn oauth_introspect_token(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    request: Request,
+    parent_id: Option<String>,
+    environment_id: Option<String>,
+) -> CmdResult<serde_json::Value> {
+    let (ws, r) = resolve(
+        &state,
+        &workspace_id,
+        &request,
+        parent_id.as_deref(),
+        environment_id.as_deref(),
+    )?;
+    oauth::introspect(&ws, &r).await.str_err()
+}

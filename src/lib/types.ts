@@ -38,6 +38,16 @@ export type Auth =
   | { type: "none" }
   | { type: "bearer"; token: string }
   | { type: "basic"; username: string; password: string }
+  | { type: "digest"; username: string; password: string }
+  | {
+      type: "aws-sigv4";
+      accessKey: string;
+      secretKey: string;
+      region: string;
+      service: string;
+      sessionToken?: string;
+    }
+  | { type: "ntlm"; username: string; password: string; domain?: string }
   | { type: "api-key"; key: string; value: string; location: "header" | "query" }
   | ({ type: "oauth2" } & OAuth2);
 
@@ -60,7 +70,10 @@ export interface OAuth2 {
   pkce?: boolean;
   username?: string;
   password?: string;
-  clientAuth?: "basic" | "body";
+  clientAuth?: "basic" | "body" | "private-key-jwt";
+  privateKeyPem?: string;
+  keyId?: string;
+  introspectionUrl?: string;
   extraParams?: KeyValue[];
   /** Default "Bearer". */
   headerPrefix?: string;
@@ -100,6 +113,10 @@ export interface RequestSettings {
   verifyTls: boolean;
   /** Use the workspace cookie jar (default true). */
   cookies?: boolean;
+  proxyUrl?: string;
+  caCert?: string;
+  clientCert?: string;
+  clientKey?: string;
 }
 
 /** A cookie in the workspace jar (`.trax/cookies.json`, never committed). */
@@ -472,6 +489,7 @@ export interface HistoryEntry {
   testsPassed: number;
   testsFailed: number;
   environment?: string | null;
+  request?: SentRequest | null;
   at: string;
 }
 

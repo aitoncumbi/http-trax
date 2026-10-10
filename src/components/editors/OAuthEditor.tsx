@@ -146,8 +146,30 @@ export function OAuth2Fields({ value, onChange }: { value: OAuth2; onChange: (o:
                 <button type="button" aria-pressed={value.clientAuth === "body"} onClick={() => set({ clientAuth: "body" })}>
                   In the body
                 </button>
+                <button type="button" aria-pressed={value.clientAuth === "private-key-jwt"} onClick={() => set({ clientAuth: "private-key-jwt" })}>
+                  private_key_jwt
+                </button>
               </div>
             </div>
+            {value.clientAuth === "private-key-jwt" && (
+              <div className="flex flex-col gap-3 px-3.5 py-3">
+                <TextField
+                  label="Key ID (kid, optional)"
+                  value={value.keyId}
+                  onChange={(keyId) => set({ keyId: keyId || undefined })}
+                  placeholder="key-1"
+                />
+                <Field label="RSA private key PEM (RS256) — leave blank to sign with Client secret (HS256)">
+                  <textarea
+                    aria-label="RSA private key PEM"
+                    value={value.privateKeyPem ?? ""}
+                    onChange={(e) => set({ privateKeyPem: e.target.value || undefined })}
+                    placeholder="-----BEGIN PRIVATE KEY-----&#10;..."
+                    className="min-h-[84px] rounded-[9px] border border-border-strong bg-transparent p-2.5 font-mono text-[12px] text-text outline-none focus:border-accent-line"
+                  />
+                </Field>
+              </div>
+            )}
             <div className="flex items-center gap-3 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
                 <div className="text-[13.5px]">Header prefix</div>
@@ -162,6 +184,12 @@ export function OAuth2Fields({ value, onChange }: { value: OAuth2; onChange: (o:
               />
             </div>
           </div>
+          <TextField
+            label="Token introspection URL (RFC 7662, optional)"
+            value={value.introspectionUrl}
+            onChange={(introspectionUrl) => set({ introspectionUrl: introspectionUrl || undefined })}
+            placeholder="https://id.example.com/oauth2/introspect"
+          />
           <Field label="Extra parameters (sent with the authorization and token requests, e.g. audience)">
             <KeyValueEditor
               rows={value.extraParams ?? []}
@@ -190,11 +218,12 @@ export function OAuthTokenPanel({ target, configKey }: { target: { request: Requ
   const toast = useStore((s) => s.toast);
   const [status, setStatus] = useState<OAuthTokenStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"get" | "refresh" | null>(null);
+  const [busy, setBusy] = useState<"get" | "refresh" | "introspect" | null>(null);
   const [prompt, setPrompt] = useState<OAuthPrompt | null>(null);
   const [reveal, setReveal] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const [introspection, setIntrospection] = useState<Record<string, unknown> | null>(null);
   // The target is a new object on every render; the effect below keys on
   // `configKey` and reads the latest target from here.
   const targetRef = useRef(target);
@@ -261,10 +290,24 @@ export function OAuthTokenPanel({ target, configKey }: { target: { request: Requ
       setVersion((v) => v + 1);
     }
   };
+  const introspect = async () => {
+    if (!workspaceId) return;
+    setBusy("introspect");
+    setError(null);
+    try {
+      const res = await api.oauthIntrospectToken(workspaceId, target.request, target.parentId, envId);
+      setIntrospection(res);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   const clear = async () => {
     if (!workspaceId) return;
     try {
       await api.oauthClearToken(workspaceId, target.request, target.parentId, envId);
+      setIntrospection(null);
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -293,6 +336,12 @@ export function OAuthTokenPanel({ target, configKey }: { target: { request: Requ
                   : `Expired${token.refreshToken ? "; it's refreshed on the next send" : status.needsUser ? "; sign in again" : "; a new one is fetched on the next send"}`}
           </div>
         </div>
+        {token && (
+          <button type="button" className="btn-ghost" disabled={!!busy} onClick={() => void introspect()} title="Introspect token (RFC 7662)">
+            {busy === "introspect" ? <Loader2 size={13} className="animate-spin" /> : null}
+            Introspect
+          </button>
+        )}
         {token?.refreshToken && (
           <button type="button" className="btn-ghost" disabled={!!busy} onClick={() => void refresh()}>
             {busy === "refresh" ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} strokeWidth={1.6} />}
@@ -367,6 +416,11 @@ export function OAuthTokenPanel({ target, configKey }: { target: { request: Requ
             <span>{token.refreshToken ? "Has a refresh token" : "No refresh token"}</span>
             {token.idToken && <span>Has an ID token</span>}
           </div>
+          {introspection && (
+            <pre className="mt-2.5 max-h-40 overflow-auto rounded-lg border border-border bg-panel p-2.5 font-mono text-[11.5px] text-muted">
+              {JSON.stringify(introspection, null, 2)}
+            </pre>
+          )}
         </div>
       )}
       {error && <p className="border-t border-border-soft px-4 py-2.5 text-[12.5px] text-danger">{error}</p>}

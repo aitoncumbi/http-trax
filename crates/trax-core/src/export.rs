@@ -151,6 +151,64 @@ pub fn prepare_export(
                 password: sub(&password),
             });
         }
+        Auth::Digest { username, password } if !has_header(&headers, "authorization") => {
+            track(&username);
+            track(&password);
+            headers.push(Header::new(
+                "Authorization",
+                format!("Digest username=\"{}\", ...", sub(&username)),
+            ));
+        }
+        Auth::Ntlm {
+            username,
+            password,
+            domain,
+        } if !has_header(&headers, "authorization") => {
+            track(&username);
+            track(&password);
+            track(&domain);
+            headers.push(Header::new(
+                "Authorization",
+                crate::auth::ntlm_negotiate_header(),
+            ));
+        }
+        Auth::AwsSigV4 {
+            access_key,
+            secret_key,
+            region,
+            service,
+            session_token,
+        } if !has_header(&headers, "authorization") => {
+            track(&access_key);
+            track(&secret_key);
+            track(&region);
+            track(&service);
+            track(&session_token);
+            if resolve {
+                let _ = crate::auth::sign_aws_sigv4(
+                    &request.method,
+                    &url,
+                    &mut headers,
+                    b"",
+                    &sub(&access_key),
+                    &sub(&secret_key),
+                    &sub(&region),
+                    &sub(&service),
+                    &sub(&session_token),
+                    chrono::Utc::now(),
+                );
+            } else {
+                headers.push(Header::new(
+                    "Authorization",
+                    format!(
+                        "AWS4-HMAC-SHA256 Credential={}/<date>/{}/{}/aws4_request, ...",
+                        sub(&access_key),
+                        sub(&region),
+                        sub(&service)
+                    ),
+                ));
+            }
+        }
         Auth::OAuth2(cfg) if !has_header(&headers, "authorization") => {
             let cached = vars.as_ref().and_then(|v| {
                 let r = oauth::Resolved::new(&cfg, v, &request.settings);

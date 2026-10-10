@@ -73,23 +73,23 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [x] Palette actions (Ctrl+.)
 - [x] Workspace switcher with team size and request counts
 
-## Phase 1 — Daily-driver polish
+## Phase 1 — Daily-driver polish ✅
 
-- [ ] Import: Insomnia, Bruno, OpenAPI 3.x, HAR (cURL, Postman and Postman's OAuth 2.0 settings are done); Postman example responses
+- [x] Import: Insomnia, Bruno, OpenAPI 3.x, HAR (cURL, Postman and Postman's OAuth 2.0 settings are done); Postman example responses; `import_spec` MCP tool
 - [x] Export: copy as cURL and code snippets (cURL, fetch, axios, Python requests, Go, Rust), with or without variables filled in
-- [ ] Search history and "restore as request"
+- [x] Search history and "restore as request"
 - [x] Cookie jar per workspace (redirect-aware, kept in `.trax/cookies.json`), cookie manager, response Cookies tab, per-request opt-out, MCP `list_cookies` / `clear_cookies`
-- [ ] Drag and drop to reorder and move requests and folders
+- [x] Drag and drop to reorder and move requests and folders
 - [x] Variable autocomplete and hover-to-preview resolved values in the URL bar, key-value tables and body editors
 - [x] Response tools: search, JSONPath filter, word wrap toggle, save body to file; very large bodies open as plain text
-- [ ] JMESPath filter, and virtualized rendering for very large responses
-- [ ] Configurable keyboard shortcuts
-- [ ] Finish the Courion rename: installers, binaries, MCP server name, and a `courion.*` alias for the script API
-- [ ] Proxy settings, custom CA certificates, client certificates (mTLS)
+- [x] JMESPath filter, and virtualized rendering for very large responses
+- [x] Configurable keyboard shortcuts
+- [x] Finish the Courion rename: installers, binaries, MCP server name, and a `courion.*` alias for the script API
+- [x] Proxy settings, custom CA certificates, client certificates (mTLS)
 - [x] OAuth 2.0: authorization code with PKCE (loopback redirect), client credentials, device code and password grants; tokens cached locally, refreshed and fetched automatically when no sign-in is needed; works for agents through MCP
-- [ ] More auth: Digest, AWS SigV4, NTLM; OAuth 2.0 client assertions (private_key_jwt) and token introspection
-- [ ] Tighten the webview CSP
-- [ ] In-memory workspace index for very large workspaces
+- [x] More auth: Digest, AWS SigV4, NTLM; OAuth 2.0 client assertions (private_key_jwt) and token introspection
+- [x] Tighten the webview CSP
+- [x] In-memory workspace index for very large workspaces
 
 ## Phase 2 — Teams and git, deeper
 

@@ -162,7 +162,7 @@ export function CommandPalette() {
       { id: "ws", label: "Switch workspace", icon: <LayoutGrid size={16} strokeWidth={1.4} />, shortcut: "Ctrl 1–9", section: "Commands", run: () => s.openPalette("workspaces") },
       { id: "env", label: "Switch environment", icon: <SlidersHorizontal size={16} strokeWidth={1.4} />, shortcut: "Ctrl E", section: "Commands", run: () => s.openPalette("environments") },
       { id: "curl", label: "Import from cURL", icon: <Code2 size={16} strokeWidth={1.4} />, shortcut: "Ctrl Shift I", section: "Commands", run: () => s.showImportDialog("curl") },
-      { id: "postman", label: "Import from Postman", icon: <Download size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.showImportDialog("postman") },
+      { id: "postman", label: "Import from file / spec (OpenAPI, Postman, HAR…)", icon: <Download size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.showImportDialog("postman") },
       { id: "collection", label: "New collection", icon: <FolderTree size={16} strokeWidth={1.4} />, section: "Commands", run: () => void s.createCollection() },
       { id: "git", label: "Open source control", icon: <GitBranch size={16} strokeWidth={1.4} />, section: "Commands", run: () => s.setView("git") },
       { id: "sync", label: "Sync with remote now", icon: <RefreshCw size={16} strokeWidth={1.4} />, section: "Commands", run: () => void s.syncNow() },

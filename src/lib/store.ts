@@ -151,6 +151,8 @@ interface Actions {
   deleteGroup: (groupId: string) => Promise<void>;
   deleteRequest: (requestId: string) => Promise<void>;
   duplicateRequest: (requestId: string) => Promise<void>;
+  moveItem: (itemId: string, targetParentId: string | null, beforeId: string | null) => Promise<void>;
+  restoreHistoryEntry: (entryId: string) => Promise<void>;
   openGroup: (groupId: string) => Promise<void>;
   openEnvironment: (envId: string) => void;
   createEnvironment: () => Promise<void>;
@@ -521,6 +523,34 @@ export const useStore = create<Store>()((set, get) => {
         const copy = await api.duplicateRequest(id, requestId);
         await get().reloadTree();
         await get().openRequest(copy.id);
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    moveItem: async (itemId, targetParentId, beforeId) => {
+      const id = wsId();
+      if (!id) return;
+      try {
+        await api.moveItem(id, itemId, targetParentId, beforeId);
+        await get().reloadTree();
+        get().bumpGit();
+      } catch (e) {
+        fail(e);
+      }
+    },
+
+    restoreHistoryEntry: async (entryId) => {
+      const id = wsId();
+      if (!id) return;
+      const parentId = get().activeEntry()?.prefs.scopedCollection ?? null;
+      try {
+        const created = await api.restoreHistoryEntry(id, entryId, parentId);
+        await get().reloadTree();
+        get().setView("collections");
+        await get().openRequest(created.id);
+        get().toast("success", `Restored "${created.name}"`);
+        get().bumpGit();
       } catch (e) {
         fail(e);
       }

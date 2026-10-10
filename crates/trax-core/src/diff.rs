@@ -469,6 +469,9 @@ fn auth_name(a: &Auth) -> String {
         Auth::None => "none",
         Auth::Bearer { .. } => "bearer",
         Auth::Basic { .. } => "basic",
+        Auth::Digest { .. } => "digest",
+        Auth::AwsSigV4 { .. } => "aws-sigv4",
+        Auth::Ntlm { .. } => "ntlm",
         Auth::ApiKey { .. } => "api-key",
         Auth::OAuth2(_) => "oauth2",
     }
@@ -481,6 +484,22 @@ fn describe_auth(a: &Auth) -> String {
         Auth::None => "no auth".into(),
         Auth::Bearer { token } => format!("Bearer {token}"),
         Auth::Basic { username, .. } => format!("Basic {username}:••••"),
+        Auth::Digest { username, .. } => format!("Digest {username}:••••"),
+        Auth::AwsSigV4 {
+            access_key,
+            region,
+            service,
+            ..
+        } => format!("AWS SigV4 {access_key} ({service}/{region})"),
+        Auth::Ntlm {
+            username, domain, ..
+        } => {
+            if domain.is_empty() {
+                format!("NTLM {username}:••••")
+            } else {
+                format!("NTLM {domain}\\{username}:••••")
+            }
+        }
         Auth::ApiKey { key, location, .. } => {
             format!("API key {key} in {location:?}").to_lowercase()
         }

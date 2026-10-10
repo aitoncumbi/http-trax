@@ -16,9 +16,12 @@
 //! One small file per request keeps git diffs readable and merge conflicts
 //! local to the request that actually changed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +41,90 @@ const ENV_SUFFIX: &str = ".env.yaml";
 const STATE_FILE: &str = "state.json";
 
 const GITIGNORE: &str = "# http-trax local state: runtime variables, secrets, history\n.trax/\n";
+
+/// In-memory index of a workspace's tree and id-to-path mappings so large
+/// workspaces don't re-parse hundreds of YAML files on every lookup.
+#[derive(Debug, Clone)]
+struct WorkspaceIndex {
+    fingerprint: u64,
+    tree: WorkspaceTree,
+    request_paths: HashMap<String, PathBuf>,
+    group_dirs: HashMap<String, (PathBuf, bool)>,
+}
+
+static INDEX_CACHE: OnceLock<Mutex<HashMap<PathBuf, WorkspaceIndex>>> = OnceLock::new();
+
+fn index_cache() -> &'static Mutex<HashMap<PathBuf, WorkspaceIndex>> {
+    INDEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn build_index_maps(
+    root: &Path,
+    collections: &[GroupNode],
+) -> (HashMap<String, PathBuf>, HashMap<String, (PathBuf, bool)>) {
+    let mut request_paths = HashMap::new();
+    let mut group_dirs = HashMap::new();
+    fn walk(
+        root: &Path,
+        node: &GroupNode,
+        is_col: bool,
+        reqs: &mut HashMap<String, PathBuf>,
+        groups: &mut HashMap<String, (PathBuf, bool)>,
+    ) {
+        groups.insert(node.meta.id.clone(), (root.join(&node.dir), is_col));
+        for item in &node.items {
+            match item {
+                TreeItem::Folder(f) => walk(root, f, false, reqs, groups),
+                TreeItem::Request(r) => {
+                    reqs.insert(r.id.clone(), root.join(&r.path));
+                }
+            }
+        }
+    }
+    for col in collections {
+        walk(root, col, true, &mut request_paths, &mut group_dirs);
+    }
+    (request_paths, group_dirs)
+}
+
+fn hash_path_meta(hasher: &mut std::collections::hash_map::DefaultHasher, path: &Path) {
+    path.hash(hasher);
+    if let Ok(meta) = fs::metadata(path) {
+        meta.len().hash(hasher);
+        if let Ok(mtime) = meta.modified() {
+            if let Ok(dur) = mtime.duration_since(UNIX_EPOCH) {
+                dur.as_secs().hash(hasher);
+                dur.subsec_nanos().hash(hasher);
+            }
+        }
+    } else {
+        0u64.hash(hasher);
+    }
+}
+
+fn hash_dir_recursive(hasher: &mut std::collections::hash_map::DefaultHasher, dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    entries.sort();
+    entries.len().hash(hasher);
+    for path in entries {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name.starts_with('.') || name.ends_with(".tmp") {
+            continue;
+        }
+        if path.is_dir() {
+            path.hash(hasher);
+            hash_dir_recursive(hasher, &path);
+        } else {
+            hash_path_meta(hasher, &path);
+        }
+    }
+}
 
 /// Machine-local state kept in `.trax/state.json` (git-ignored).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -159,12 +246,58 @@ impl Workspace {
     }
 
     pub fn save_manifest(&self, manifest: &WorkspaceManifest) -> Result<()> {
-        write_yaml(&self.root.join(MANIFEST_FILE), manifest)
+        write_yaml(&self.root.join(MANIFEST_FILE), manifest)?;
+        self.invalidate_cache();
+        Ok(())
+    }
+
+    /// Drop the in-memory index for this workspace so the next access rebuilds it.
+    pub fn invalidate_cache(&self) {
+        if let Ok(mut cache) = index_cache().lock() {
+            cache.remove(&self.root);
+        }
+    }
+
+    fn compute_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hash_path_meta(&mut hasher, &self.root.join(MANIFEST_FILE));
+        hash_path_meta(&mut hasher, &self.state_path());
+        hash_dir_recursive(&mut hasher, &self.root.join(COLLECTIONS_DIR));
+        hash_dir_recursive(&mut hasher, &self.env_dir(true));
+        hash_dir_recursive(&mut hasher, &self.env_dir(false));
+        hasher.finish()
+    }
+
+    fn ensure_index(&self) -> Result<WorkspaceIndex> {
+        let fp = self.compute_fingerprint();
+        if let Ok(cache) = index_cache().lock() {
+            if let Some(idx) = cache.get(&self.root) {
+                if idx.fingerprint == fp {
+                    return Ok(idx.clone());
+                }
+            }
+        }
+        let tree = self.load_tree_uncached()?;
+        let (request_paths, group_dirs) = build_index_maps(&self.root, &tree.collections);
+        let idx = WorkspaceIndex {
+            fingerprint: fp,
+            tree,
+            request_paths,
+            group_dirs,
+        };
+        if let Ok(mut cache) = index_cache().lock() {
+            cache.insert(self.root.clone(), idx.clone());
+        }
+        Ok(idx)
     }
 
     // ------------------------------------------------------------- tree
 
     pub fn tree(&self) -> Result<WorkspaceTree> {
+        Ok(self.ensure_index()?.tree)
+    }
+
+    fn load_tree_uncached(&self) -> Result<WorkspaceTree> {
         let manifest = self.manifest()?;
         let mut problems = Vec::new();
         let mut collections = Vec::new();
@@ -268,19 +401,15 @@ impl Workspace {
     }
 
     fn find_group_dir(&self, id: &str) -> Result<(PathBuf, bool)> {
-        for c in self.collections()? {
-            if let Some(g) = c.find_group(id) {
-                return Ok((self.root.join(&g.dir), g.meta.id == c.meta.id));
-            }
+        if let Some(found) = self.ensure_index()?.group_dirs.get(id).cloned() {
+            return Ok(found);
         }
         Err(Error::NotFound(format!("collection or folder {id}")))
     }
 
     fn find_request_path(&self, id: &str) -> Result<PathBuf> {
-        for c in self.collections()? {
-            if let Some(r) = c.requests().into_iter().find(|r| r.id == id) {
-                return Ok(self.root.join(&r.path));
-            }
+        if let Some(found) = self.ensure_index()?.request_paths.get(id).cloned() {
+            return Ok(found);
         }
         Err(Error::NotFound(format!("request {id}")))
     }
@@ -296,6 +425,7 @@ impl Workspace {
         let dir = unique_path(&base, &slugify(name), "");
         fs::create_dir_all(&dir).at(&dir)?;
         write_yaml(&dir.join(COLLECTION_FILE), &meta)?;
+        self.invalidate_cache();
         Ok(GroupNode {
             meta,
             dir: rel(&self.root, &dir),
@@ -310,6 +440,7 @@ impl Workspace {
         let dir = unique_path(&parent_dir, &slugify(name), "");
         fs::create_dir_all(&dir).at(&dir)?;
         write_yaml(&dir.join(FOLDER_FILE), &meta)?;
+        self.invalidate_cache();
         Ok(GroupNode {
             meta,
             dir: rel(&self.root, &dir),
@@ -343,7 +474,9 @@ impl Workspace {
             fs::rename(&dir, &target).at(&dir)?;
             dir = target;
         }
-        write_yaml(&dir.join(file), meta)
+        write_yaml(&dir.join(file), meta)?;
+        self.invalidate_cache();
+        Ok(())
     }
 
     pub fn delete_group(&self, id: &str) -> Result<()> {
@@ -359,7 +492,9 @@ impl Workspace {
             self.delete_responses_dir(&r.id)?;
         }
         let dir = self.root.join(&group.dir);
-        fs::remove_dir_all(&dir).at(&dir)
+        fs::remove_dir_all(&dir).at(&dir)?;
+        self.invalidate_cache();
+        Ok(())
     }
 
     fn next_seq(&self, dir: &Path) -> Result<i64> {
@@ -447,6 +582,7 @@ impl Workspace {
         normalise(&mut request);
         let path = unique_path(&dir, &slugify(&request.name), REQUEST_SUFFIX);
         write_yaml(&path, &request)?;
+        self.invalidate_cache();
         Ok(request)
     }
 
@@ -470,15 +606,20 @@ impl Workspace {
             let target = unique_path(dir, &slug, REQUEST_SUFFIX);
             write_yaml(&target, &request)?;
             fs::remove_file(&path).at(&path)?;
+            self.invalidate_cache();
             return Ok(());
         }
-        write_yaml(&path, &request)
+        write_yaml(&path, &request)?;
+        self.invalidate_cache();
+        Ok(())
     }
 
     pub fn delete_request(&self, id: &str) -> Result<()> {
         let path = self.find_request_path(id)?;
         fs::remove_file(&path).at(&path)?;
-        self.delete_responses_dir(id)
+        self.delete_responses_dir(id)?;
+        self.invalidate_cache();
+        Ok(())
     }
 
     pub fn duplicate_request(&self, id: &str) -> Result<Request> {
@@ -497,16 +638,160 @@ impl Workspace {
     }
 
     pub fn move_request(&self, id: &str, new_parent_id: &str) -> Result<()> {
-        let path = self.find_request_path(id)?;
-        let (dir, _) = self.find_group_dir(new_parent_id)?;
-        if path.parent() == Some(dir.as_path()) {
+        self.move_item(id, Some(new_parent_id), None)
+    }
+
+    /// Move or reorder a collection, folder, or request.
+    ///
+    /// - When `target_parent_id` is `None`, `item_id` must be a top-level
+    ///   collection and is reordered before `before_id` (or placed at the end).
+    /// - When `target_parent_id` is `Some(parent_id)`, `item_id` (a request or
+    ///   folder) is moved into `parent_id` and positioned before `before_id`
+    ///   (or placed at the end when `before_id` is `None`).
+    pub fn move_item(
+        &self,
+        item_id: &str,
+        target_parent_id: Option<&str>,
+        before_id: Option<&str>,
+    ) -> Result<()> {
+        let before_id = before_id.filter(|b| !b.is_empty() && *b != item_id);
+        let target_parent_id = target_parent_id.filter(|p| !p.is_empty());
+
+        let Some(parent_id) = target_parent_id else {
+            // Reordering top-level collections.
+            let mut cols = self.collections()?;
+            let pos = cols
+                .iter()
+                .position(|c| c.meta.id == item_id)
+                .ok_or_else(|| Error::NotFound(format!("collection {item_id}")))?;
+            let moved = cols.remove(pos);
+            if let Some(before) = before_id {
+                if let Some(idx) = cols.iter().position(|c| c.meta.id == before) {
+                    cols.insert(idx, moved);
+                } else {
+                    cols.push(moved);
+                }
+            } else {
+                cols.push(moved);
+            }
+            for (idx, col) in cols.into_iter().enumerate() {
+                let new_seq = (idx as i64) + 1;
+                if col.meta.seq != new_seq {
+                    let mut meta = col.meta;
+                    meta.seq = new_seq;
+                    let path = self.root.join(&col.dir).join(COLLECTION_FILE);
+                    write_yaml(&path, &meta)?;
+                }
+            }
+            self.invalidate_cache();
             return Ok(());
+        };
+
+        let (target_dir, _) = self.find_group_dir(parent_id)?;
+        if let Ok((folder_dir, is_collection)) = self.find_group_dir(item_id) {
+            if is_collection {
+                return Err(Error::Invalid(
+                    "cannot move a collection inside a folder".into(),
+                ));
+            }
+            let chain = self.group_chain(parent_id)?;
+            if chain.iter().any(|g| g.id == item_id) {
+                return Err(Error::Invalid("cannot move a folder into itself".into()));
+            }
+            if folder_dir.parent() != Some(target_dir.as_path()) {
+                let meta: GroupMeta = read_yaml(&folder_dir.join(FOLDER_FILE))?;
+                let dest = unique_path(&target_dir, &slugify(&meta.name), "");
+                fs::rename(&folder_dir, &dest).at(&folder_dir)?;
+            }
+        } else {
+            let req_path = self.find_request_path(item_id)?;
+            if req_path.parent() != Some(target_dir.as_path()) {
+                let req: Request = read_yaml(&req_path)?;
+                let dest = unique_path(&target_dir, &slugify(&req.name), REQUEST_SUFFIX);
+                write_yaml(&dest, &req)?;
+                fs::remove_file(&req_path).at(&req_path)?;
+            }
         }
-        let mut request: Request = read_yaml(&path)?;
-        request.seq = self.next_seq(&dir)?;
-        let target = unique_path(&dir, &slugify(&request.name), REQUEST_SUFFIX);
-        write_yaml(&target, &request)?;
-        fs::remove_file(&path).at(&path)
+
+        self.resequence_group(&target_dir, item_id, before_id)?;
+        self.invalidate_cache();
+        Ok(())
+    }
+
+    fn resequence_group(&self, dir: &Path, moved_id: &str, before_id: Option<&str>) -> Result<()> {
+        #[allow(clippy::large_enum_variant)]
+        enum ChildEntry {
+            Folder(PathBuf, GroupMeta),
+            Request(PathBuf, Request),
+        }
+        impl ChildEntry {
+            fn id(&self) -> &str {
+                match self {
+                    ChildEntry::Folder(_, m) => &m.id,
+                    ChildEntry::Request(_, r) => &r.id,
+                }
+            }
+            fn sort_key(&self) -> (i64, String) {
+                match self {
+                    ChildEntry::Folder(_, m) => sort_key(m.seq, &m.name),
+                    ChildEntry::Request(_, r) => sort_key(r.seq, &r.name),
+                }
+            }
+        }
+
+        let mut children = Vec::new();
+        for path in read_dir_sorted(dir)? {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() && path.join(FOLDER_FILE).is_file() {
+                let meta_path = path.join(FOLDER_FILE);
+                if let Ok(meta) = read_yaml::<GroupMeta>(&meta_path) {
+                    children.push(ChildEntry::Folder(meta_path, meta));
+                }
+            } else if name.ends_with(REQUEST_SUFFIX) {
+                if let Ok(req) = read_yaml::<Request>(&path) {
+                    children.push(ChildEntry::Request(path, req));
+                }
+            }
+        }
+        children.sort_by_key(|c| c.sort_key());
+
+        if let Some(pos) = children.iter().position(|c| c.id() == moved_id) {
+            let item = children.remove(pos);
+            if let Some(before) = before_id {
+                if let Some(idx) = children.iter().position(|c| c.id() == before) {
+                    children.insert(idx, item);
+                } else {
+                    children.push(item);
+                }
+            } else {
+                children.push(item);
+            }
+        }
+
+        for (idx, child) in children.into_iter().enumerate() {
+            let new_seq = (idx as i64) + 1;
+            match child {
+                ChildEntry::Folder(path, mut meta) => {
+                    if meta.seq != new_seq {
+                        meta.seq = new_seq;
+                        write_yaml(&path, &meta)?;
+                    }
+                }
+                ChildEntry::Request(path, mut req) => {
+                    if req.seq != new_seq {
+                        req.seq = new_seq;
+                        write_yaml(&path, &req)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     // ----------------------------------------------------- environments
@@ -628,6 +913,7 @@ impl Workspace {
             None => unique_path(&self.env_dir(true), &slugify(&env.name), ENV_SUFFIX),
         };
         write_yaml(&path, &shared)?;
+        self.invalidate_cache();
         Ok(env)
     }
 
@@ -642,6 +928,7 @@ impl Workspace {
             let target = unique_path(&self.env_dir(shared), &slugify(&env.name), ENV_SUFFIX);
             write_yaml(&target, &env)?;
             fs::remove_file(&path).at(&path)?;
+            self.invalidate_cache();
         }
         self.environment(id)
     }
@@ -654,7 +941,9 @@ impl Workspace {
         self.update_local_state(|state| {
             state.secrets.remove(id);
             state.overrides.remove(id);
-        })
+        })?;
+        self.invalidate_cache();
+        Ok(())
     }
 
     /// Effective variables of an environment: enabled shared values, then
@@ -692,6 +981,7 @@ impl Workspace {
         f(&mut state);
         if state != before {
             write_json(&self.state_path(), &state)?;
+            self.invalidate_cache();
         }
         Ok(())
     }
@@ -1006,5 +1296,68 @@ mod tests {
         ws.delete_saved_response(&r.id, &saved.id).unwrap();
         assert!(ws.saved_responses(&r.id).unwrap().is_empty());
         assert!(ws.saved_responses("../etc").is_err());
+    }
+
+    #[test]
+    fn move_and_reorder_items_and_collections() {
+        let (_dir, ws) = ws();
+        let c1 = ws.create_collection("First").unwrap();
+        let c2 = ws.create_collection("Second").unwrap();
+        let f1 = ws.create_folder(&c1.meta.id, "Folder A").unwrap();
+        let f2 = ws.create_folder(&f1.meta.id, "Subfolder B").unwrap();
+        let r1 = ws
+            .create_request(&c1.meta.id, Request::new("Req 1", "GET", "/1"))
+            .unwrap();
+        let r2 = ws
+            .create_request(&c1.meta.id, Request::new("Req 2", "GET", "/2"))
+            .unwrap();
+
+        // Reorder r2 before f1 inside c1.
+        ws.move_item(&r2.id, Some(&c1.meta.id), Some(&f1.meta.id))
+            .unwrap();
+        let items = &ws.tree().unwrap().collections[0].items;
+        let ids: Vec<&str> = items
+            .iter()
+            .map(|i| match i {
+                TreeItem::Folder(f) => f.meta.id.as_str(),
+                TreeItem::Request(r) => r.id.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![r2.id.as_str(), f1.meta.id.as_str(), r1.id.as_str()]
+        );
+
+        // Prevent moving a folder into its own descendant.
+        assert!(ws.move_item(&f1.meta.id, Some(&f2.meta.id), None).is_err());
+
+        // Move folder f1 (with Subfolder B) into collection c2.
+        ws.move_item(&f1.meta.id, Some(&c2.meta.id), None).unwrap();
+        let tree = ws.tree().unwrap();
+        assert_eq!(tree.collections[1].items.len(), 1);
+
+        // Reorder top-level collection c2 before c1.
+        ws.move_item(&c2.meta.id, None, Some(&c1.meta.id)).unwrap();
+        let tree = ws.tree().unwrap();
+        assert_eq!(tree.collections[0].meta.id, c2.meta.id);
+        assert_eq!(tree.collections[1].meta.id, c1.meta.id);
+    }
+
+    #[test]
+    fn workspace_index_caches_and_invalidates() {
+        let (_dir, ws) = ws();
+        let c = ws.create_collection("Indexed").unwrap();
+        let r = ws
+            .create_request(&c.meta.id, Request::new("Ping", "GET", "/ping"))
+            .unwrap();
+        let t1 = ws.tree().unwrap();
+        assert_eq!(t1.collections.len(), 1);
+        assert!(index_cache().lock().unwrap().contains_key(ws.root()));
+        // Lookup uses cached index.
+        assert_eq!(ws.request(&r.id).unwrap().name, "Ping");
+        // Mutation invalidates the cache.
+        ws.delete_request(&r.id).unwrap();
+        assert!(!index_cache().lock().unwrap().contains_key(ws.root()));
+        assert!(ws.tree().unwrap().collections[0].requests().is_empty());
     }
 }

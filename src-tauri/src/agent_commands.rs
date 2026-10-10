@@ -93,7 +93,7 @@ fn config_candidates(client: &str, workspace_root: Option<&Path>) -> Vec<PathBuf
 
 fn registers_trax(path: &Path) -> bool {
     std::fs::read_to_string(path)
-        .map(|text| text.contains("trax-mcp"))
+        .map(|text| text.contains("courion-mcp") || text.contains("trax-mcp"))
         .unwrap_or(false)
 }
 

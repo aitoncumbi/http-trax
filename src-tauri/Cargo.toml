@@ -6,9 +6,19 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+default-run = "courion"
+
 [lib]
 name = "http_trax_lib"
 crate-type = ["rlib"]
+
+[[bin]]
+name = "courion"
+path = "src/bin/courion.rs"
+
+[[bin]]
+name = "http-trax"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

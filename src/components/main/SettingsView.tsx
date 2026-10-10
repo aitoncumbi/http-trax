@@ -1,16 +1,27 @@
 "use client";
 
-import { Pencil, Plus, Save, Trash2 } from "lucide-react";
+import { Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "@/lib/api";
+import {
+  eventToBinding,
+  formatShortcut,
+  resetShortcuts,
+  setShortcutBinding,
+  SHORTCUT_DEFS,
+  type ShortcutAction,
+  useShortcuts,
+} from "@/lib/shortcuts";
 import { useStore } from "@/lib/store";
 import type { Identity, Remote, SyncSettings, Variable, WorkspaceManifest } from "@/lib/types";
+import { cx } from "@/lib/util";
 
 import { KeyValueEditor, makeVar } from "../editors/KeyValueEditor";
 
 export const SETTINGS_SECTIONS = [
   { id: "appearance", title: "Appearance" },
+  { id: "shortcuts", title: "Keyboard shortcuts" },
   { id: "workspace", title: "Workspace (shared via git)" },
   { id: "sync", title: "Background sync (this machine)" },
   { id: "identity", title: "Git identity for this repository" },
@@ -40,6 +51,7 @@ export function SettingsView() {
       <div className="max-w-[640px]">
       <h2 className="mb-6 text-[20px] leading-[26px] font-semibold tracking-[-0.02em]">Settings</h2>
       <Appearance />
+      <ShortcutsSettings />
       {/* Keyed so the forms re-initialise when the data changes on disk. */}
       <ManifestForm key={JSON.stringify(tree.manifest)} workspaceId={entry.id} manifest={tree.manifest} root={tree.root} />
       <SyncForm key={`${entry.id}:${JSON.stringify(entry.sync)}`} workspaceId={entry.id} initial={entry.sync} />
@@ -51,6 +63,56 @@ export function SettingsView() {
       </Section>
       </div>
     </div>
+  );
+}
+
+function ShortcutsSettings() {
+  const shortcuts = useShortcuts();
+  const [recording, setRecording] = useState<ShortcutAction | null>(null);
+
+  return (
+    <Section id="shortcuts">
+      <p className="mb-2.5 text-[12px] text-faint">Click a shortcut and press a new key combination (e.g. Ctrl+Shift+K) to rebind it.</p>
+      <div className="divide-y divide-border-soft rounded-[10px] border border-border-mid">
+        {SHORTCUT_DEFS.map((def) => {
+          const isRec = recording === def.id;
+          return (
+            <div key={def.id} className="flex items-center justify-between px-3.5 py-2">
+              <span className="text-[13.5px]">{def.label}</span>
+              <button
+                type="button"
+                aria-label={`Shortcut for ${def.label}`}
+                onClick={() => setRecording(isRec ? null : def.id)}
+                onBlur={() => setRecording((curr) => (curr === def.id ? null : curr))}
+                onKeyDown={(e) => {
+                  if (!isRec) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (e.key === "Escape") {
+                    setRecording(null);
+                    return;
+                  }
+                  const next = eventToBinding(e);
+                  if (next) {
+                    setShortcutBinding(def.id, next);
+                    setRecording(null);
+                  }
+                }}
+                className={cx(
+                  "rounded-md border px-2.5 py-1 font-mono text-[12px]",
+                  isRec ? "border-accent-line bg-accent-soft text-accent-text" : "border-border-strong bg-panel-2 text-text hover:bg-hover",
+                )}
+              >
+                {isRec ? "Press keys…" : formatShortcut(shortcuts[def.id])}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button type="button" className="btn-ghost mt-2 h-8 text-[12.5px]" onClick={() => resetShortcuts()}>
+        <RotateCcw size={12} /> Reset shortcuts to defaults
+      </button>
+    </Section>
   );
 }
 

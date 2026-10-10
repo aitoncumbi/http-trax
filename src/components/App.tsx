@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { matchesShortcut, useShortcuts } from "@/lib/shortcuts";
 import { useStore, useWorkspaceTabs } from "@/lib/store";
 
 import { ActivityBar } from "./ActivityBar";
@@ -61,13 +62,11 @@ function useSidebarWidth(): [number, (e: React.MouseEvent) => void] {
 
 function Shortcuts() {
   const { active } = useWorkspaceTabs();
+  const shortcuts = useShortcuts();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
       const st = useStore.getState();
-      const key = e.key.toLowerCase();
-      if (key === "k") {
+      if (matchesShortcut(e, shortcuts.palette)) {
         e.preventDefault();
         if (st.palette) st.closePalette();
         else st.openPalette();
@@ -75,34 +74,34 @@ function Shortcuts() {
       }
       // Leave keys alone while a dialog or the palette has focus.
       if (st.palette || st.dialog) return;
-      if (key === "n" && !e.shiftKey) {
+      if (matchesShortcut(e, shortcuts.newRequest)) {
         e.preventDefault();
         void st.newRequestHere();
-      } else if (key === "e" && !e.shiftKey) {
+      } else if (matchesShortcut(e, shortcuts.environments)) {
         e.preventDefault();
         st.openPalette("environments");
-      } else if (key === "i" && e.shiftKey) {
+      } else if (matchesShortcut(e, shortcuts.import)) {
         e.preventDefault();
         st.showImportDialog();
-      } else if (/^[1-9]$/.test(e.key) && !e.shiftKey && !e.altKey) {
+      } else if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key) && !e.shiftKey && !e.altKey) {
         e.preventDefault();
         void st.selectWorkspaceByIndex(Number(e.key) - 1);
       } else if (!active) {
         return;
-      } else if (key === "s") {
+      } else if (matchesShortcut(e, shortcuts.save)) {
         e.preventDefault();
         void st.saveTab(active.id);
-      } else if (e.key === "Enter" && active.kind === "request") {
+      } else if (matchesShortcut(e, shortcuts.sendRequest) && active.kind === "request") {
         e.preventDefault();
         void st.sendTab(active.id);
-      } else if (key === "w") {
+      } else if (matchesShortcut(e, shortcuts.closeTab)) {
         e.preventDefault();
         void st.closeTab(active.id);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active]);
+  }, [active, shortcuts]);
   return null;
 }
 

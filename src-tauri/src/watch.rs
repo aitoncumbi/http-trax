@@ -38,7 +38,12 @@ fn relevant(path: &Path) -> bool {
     !ignored_dir && !tmp
 }
 
-fn spawn_debouncer(app: AppHandle, key: String, rx: mpsc::Receiver<()>) {
+fn spawn_debouncer(
+    app: AppHandle,
+    key: String,
+    ws_path: Option<std::path::PathBuf>,
+    rx: mpsc::Receiver<()>,
+) {
     std::thread::spawn(move || {
         while rx.recv().is_ok() {
             // Collapse bursts (a git checkout touches many files).
@@ -46,6 +51,11 @@ fn spawn_debouncer(app: AppHandle, key: String, rx: mpsc::Receiver<()>) {
             if key == REGISTRY_KEY {
                 let _ = app.emit("registry-changed", serde_json::json!({}));
             } else {
+                if let Some(p) = &ws_path {
+                    if let Ok(ws) = trax_core::Workspace::open(p) {
+                        ws.invalidate_cache();
+                    }
+                }
                 let _ = app.emit(
                     "workspace-changed",
                     ChangedEvent {
@@ -83,7 +93,8 @@ fn make_watcher(
         }
     })?;
     watcher.watch(path, mode)?;
-    spawn_debouncer(app.clone(), key.to_string(), rx);
+    let ws_path = (!filter_registry).then(|| path.to_path_buf());
+    spawn_debouncer(app.clone(), key.to_string(), ws_path, rx);
     Ok(watcher)
 }
 

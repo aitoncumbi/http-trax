@@ -22,14 +22,14 @@ use trax_core::agents::{self, ActivityKind, AgentActivity, AgentSession};
 
 pub use tools::tool_definitions;
 
-pub const SERVER_NAME: &str = "http-trax";
+pub const SERVER_NAME: &str = "courion";
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
     &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "\
-http-trax is a git-backed API client (like Postman). Collections, requests and environments \
+Courion (http-trax) is a git-backed API client (like Postman). Collections, requests and environments \
 are YAML files in a workspace directory, usually committed next to the service they test. \
-The developer sees everything you create here live in the http-trax desktop app.
+The developer sees everything you create here live in the Courion desktop app.
 
 Typical loop after you build or change an HTTP service:
 1. `init_workspace` in the service repo (e.g. ./api-tests) or pick one from `list_workspaces`.
@@ -221,7 +221,7 @@ impl Server {
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": {
                 "name": SERVER_NAME,
-                "title": "http-trax",
+                "title": "Courion",
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "instructions": INSTRUCTIONS,

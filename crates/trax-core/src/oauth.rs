@@ -50,6 +50,9 @@ pub struct Resolved {
     pub username: String,
     pub password: String,
     pub client_auth: OAuth2ClientAuth,
+    pub private_key_pem: String,
+    pub key_id: String,
+    pub introspection_url: String,
     pub extra: Vec<(String, String)>,
     pub header_prefix: String,
     /// Timeout and TLS verification of the request, reused for token calls.
@@ -72,6 +75,9 @@ impl Resolved {
             username: sub(&cfg.username),
             password: interpolate(&cfg.password, vars),
             client_auth: cfg.client_auth,
+            private_key_pem: interpolate(&cfg.private_key_pem, vars).trim().to_string(),
+            key_id: sub(&cfg.key_id),
+            introspection_url: sub(&cfg.introspection_url),
             extra: cfg
                 .extra_params
                 .iter()
@@ -213,19 +219,45 @@ async fn post_form(
         Header::new("Content-Type", "application/x-www-form-urlencoded"),
         Header::new("Accept", "application/json"),
     ];
-    if !r.client_secret.is_empty() && r.client_auth == OAuth2ClientAuth::Basic {
-        let raw = format!("{}:{}", r.client_id, r.client_secret);
-        headers.push(Header::new(
-            "Authorization",
-            format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(raw)
-            ),
-        ));
-    } else {
-        params.push(("client_id".into(), r.client_id.clone()));
-        if !r.client_secret.is_empty() {
-            params.push(("client_secret".into(), r.client_secret.clone()));
+    match r.client_auth {
+        OAuth2ClientAuth::Basic if !r.client_secret.is_empty() => {
+            let raw = format!("{}:{}", r.client_id, r.client_secret);
+            headers.push(Header::new(
+                "Authorization",
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(raw)
+                ),
+            ));
+        }
+        OAuth2ClientAuth::PrivateKeyJwt => {
+            let key_material = if !r.private_key_pem.is_empty() {
+                &r.private_key_pem
+            } else {
+                &r.client_secret
+            };
+            let assertion = crate::auth::build_client_assertion_jwt(
+                &r.client_id,
+                url,
+                key_material,
+                &r.key_id,
+                chrono::Utc::now(),
+            )
+            .map_err(TokenError::Other)?;
+            if !r.client_id.is_empty() {
+                params.push(("client_id".into(), r.client_id.clone()));
+            }
+            params.push((
+                "client_assertion_type".into(),
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".into(),
+            ));
+            params.push(("client_assertion".into(), assertion));
+        }
+        _ => {
+            params.push(("client_id".into(), r.client_id.clone()));
+            if !r.client_secret.is_empty() {
+                params.push(("client_secret".into(), r.client_secret.clone()));
+            }
         }
     }
     for (k, v) in &r.extra {
@@ -493,6 +525,26 @@ pub async fn refresh_now(ws: &Workspace, r: &Resolved) -> Result<OAuthToken> {
         .map_err(|e| Error::Invalid(format!("refreshing failed: {e}")))?;
     store(ws, &key, &t)?;
     Ok(t)
+}
+
+/// Introspect the cached access token against the configured RFC 7662 endpoint.
+pub async fn introspect(ws: &Workspace, r: &Resolved) -> Result<Value> {
+    if r.introspection_url.is_empty() {
+        return Err(Error::Invalid("the introspection URL is empty".into()));
+    }
+    let token = cached(ws, &r.key())
+        .ok_or_else(|| Error::Invalid("no cached access token to introspect".into()))?;
+    let m = post_form(
+        r,
+        &r.introspection_url,
+        vec![
+            pair("token", &token.access_token),
+            pair("token_type_hint", "access_token"),
+        ],
+    )
+    .await
+    .map_err(|e| Error::Invalid(format!("token introspection failed: {e}")))?;
+    Ok(Value::Object(m))
 }
 
 fn random_token() -> String {
@@ -979,5 +1031,55 @@ mod tests {
         assert_eq!(t.access_token, "dev-tok");
         assert_eq!(t.expires_at, None);
         assert_eq!(shown.lock().unwrap().as_deref(), Some("WDJB-MJHT"));
+    }
+
+    #[tokio::test]
+    async fn private_key_jwt_and_token_introspection() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::init(dir.path(), "W").unwrap();
+        let idp = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains(
+                "client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer",
+            ))
+            .and(body_string_contains("client_assertion=eyJ"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(token_json("jwt-tok", None, 3600)),
+            )
+            .expect(1)
+            .mount(&idp)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/introspect"))
+            .and(body_string_contains("token=jwt-tok"))
+            .and(body_string_contains("token_type_hint=access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "active": true, "sub": "service-acct" })),
+            )
+            .expect(1)
+            .mount(&idp)
+            .await;
+
+        let mut cfg = OAuth2::new(OAuth2Grant::ClientCredentials);
+        cfg.token_url = format!("{}/token", idp.uri());
+        cfg.introspection_url = format!("{}/introspect", idp.uri());
+        cfg.client_id = "service-acct".into();
+        cfg.client_auth = OAuth2ClientAuth::PrivateKeyJwt;
+        cfg.private_key_pem = "shared-hmac-secret-key".into();
+        cfg.key_id = "k1".into();
+
+        let mut req = Request::new("Check", "GET", "http://127.0.0.1:9/check");
+        req.auth = Auth::OAuth2(Box::new(cfg));
+        let resolved = resolve_for(&ws, &req, None, None).unwrap();
+        let tok = get_new_token(&ws, &resolved, |_| {}, std::future::pending())
+            .await
+            .unwrap();
+        assert_eq!(tok.access_token, "jwt-tok");
+
+        let info = introspect(&ws, &resolved).await.unwrap();
+        assert_eq!(info["active"], true);
+        assert_eq!(info["sub"], "service-acct");
     }
 }

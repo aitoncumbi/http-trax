@@ -1,7 +1,7 @@
 "use client";
 
-import { Eraser, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Eraser, RefreshCw, RotateCcw, Search, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
@@ -25,9 +25,10 @@ export function HistoryPanel() {
   const workspaceId = useStore((s) => s.activeWorkspaceId);
   const epoch = useStore((s) => s.historyEpoch);
   const exists = useStore((s) => s.tree);
-  const { openRequest, confirm } = useStore.getState();
+  const { openRequest, restoreHistoryEntry, confirm } = useStore.getState();
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [reload, setReload] = useState(0);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -53,8 +54,21 @@ export function HistoryPanel() {
     items.forEach((i) => (i.kind === "request" ? known.add(i.id) : walk(i.items)));
   exists?.collections.forEach((c) => walk(c.items));
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return entries ?? [];
+    return (entries ?? []).filter(
+      (e) =>
+        e.name.toLowerCase().includes(q) ||
+        e.url.toLowerCase().includes(q) ||
+        e.method.toLowerCase().includes(q) ||
+        (e.status != null && String(e.status).includes(q)) ||
+        (e.environment && e.environment.toLowerCase().includes(q)),
+    );
+  }, [entries, query]);
+
   const groups: { label: string; items: HistoryEntry[] }[] = [];
-  for (const e of entries ?? []) {
+  for (const e of filtered) {
     const label = dayLabel(e.at);
     const last = groups[groups.length - 1];
     if (last?.label === label) last.items.push(e);
@@ -86,11 +100,39 @@ export function HistoryPanel() {
           )}
         </div>
       </div>
+
+      {!!entries?.length && (
+        <div className="relative mx-2 mb-2 shrink-0">
+          <Search size={13} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-faint" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter by name, URL, method, status…"
+            aria-label="Filter history"
+            className="input h-8 w-full pr-7 pl-8 text-[12.5px]"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setQuery("")}
+              className="absolute top-1/2 right-1.5 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-faint hover:text-text"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {entries && entries.length === 0 && (
           <p className="px-2.5 py-2 text-[13px] leading-[19px] text-faint">
             Requests you send, and requests AI agents run through MCP, show up here. History stays on this machine.
           </p>
+        )}
+        {entries && entries.length > 0 && filtered.length === 0 && (
+          <p className="px-2.5 py-2 text-[13px] text-faint">No history entries match &ldquo;{query}&rdquo;.</p>
         )}
         {groups.map((g) => (
           <div key={g.label}>
@@ -100,26 +142,36 @@ export function HistoryPanel() {
                 const openable = !!e.requestId && known.has(e.requestId);
                 const time = new Date(e.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
                 return (
-                  <button
+                  <div
                     key={e.id}
-                    type="button"
-                    disabled={!openable}
-                    onClick={() => {
-                      if (e.requestId) void openRequest(e.requestId);
-                    }}
-                    title={`${e.method} ${e.url}\n${time}${e.environment ? ` · ${e.environment}` : ""}${e.error ? `\n${e.error}` : ""}`}
-                    className={cx(
-                      "flex h-11 w-full items-center gap-2.5 rounded-lg px-2.5 text-left",
-                      openable ? "hover:bg-hover" : "cursor-default opacity-80",
-                    )}
+                    className="group flex h-11 w-full items-center gap-1 rounded-lg pr-1.5 pl-2.5 hover:bg-hover"
                   >
-                    <MethodPill method={e.method} className="min-w-10 px-[7px] py-[3px] text-[10.5px]" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[14px]">{e.name}</span>
-                    </span>
-                    {e.testsFailed > 0 && <span className="text-[11px] text-danger">{e.testsFailed} failed</span>}
-                    <span className={cx("font-mono text-[11.5px]", e.status ? statusColor(e.status) : "text-danger")}>{e.status ?? "ERR"}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (openable && e.requestId) void openRequest(e.requestId);
+                        else void restoreHistoryEntry(e.id);
+                      }}
+                      title={`${e.method} ${e.url}\n${time}${e.environment ? ` · ${e.environment}` : ""}${e.error ? `\n${e.error}` : ""}\n${openable ? "Click to open request" : "Click to restore as request"}`}
+                      className="flex h-full min-w-0 flex-1 items-center gap-2.5 text-left"
+                    >
+                      <MethodPill method={e.method} className="min-w-10 px-[7px] py-[3px] text-[10.5px]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14px]">{e.name}</span>
+                      </span>
+                      {e.testsFailed > 0 && <span className="text-[11px] text-danger">{e.testsFailed} failed</span>}
+                      <span className={cx("font-mono text-[11.5px]", e.status ? statusColor(e.status) : "text-danger")}>{e.status ?? "ERR"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Restore ${e.name} as request`}
+                      title="Restore as request"
+                      onClick={() => void restoreHistoryEntry(e.id)}
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-faint opacity-0 group-hover:opacity-100 hover:bg-selected hover:text-text focus:opacity-100"
+                    >
+                      <RotateCcw size={13} />
+                    </button>
+                  </div>
                 );
               })}
             </div>

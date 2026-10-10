@@ -297,6 +297,65 @@ pub fn tool_definitions() -> Vec<Value> {
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false },
         }),
+        json!({
+            "name": "import_spec",
+            "title": "Import an API spec or collection",
+            "description": "Import an OpenAPI 3.x spec (JSON or YAML), Postman collection/environment, HAR archive, Insomnia, or Bruno export into the workspace.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "content": { "type": "string", "description": "The JSON or YAML text of the spec or collection export to import." }
+                },
+                "required": ["content"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+        }),
+        json!({
+            "name": "move_item",
+            "title": "Move or reorder a request, folder, or collection",
+            "description": "Move a request or folder into another collection/folder, or reorder items within their parent (or collections at the top level).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "item_id": { "type": "string", "description": "Id of the request, folder, or collection to move." },
+                    "target_parent_id": { "type": "string", "description": "Destination collection or folder id (omit when reordering top-level collections)." },
+                    "before_id": { "type": "string", "description": "Optional sibling id to place the item before; omit to append at the end." }
+                },
+                "required": ["item_id"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+        }),
+        json!({
+            "name": "list_history",
+            "title": "List or search request history",
+            "description": "List recent request runs in the workspace, optionally filtered by a search query matching request name, URL, method, status, or environment.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "query": { "type": "string", "description": "Optional case-insensitive filter string." },
+                    "limit": { "type": "integer", "description": "Maximum entries to return (default 50)." }
+                }
+            },
+            "annotations": read_only,
+        }),
+        json!({
+            "name": "restore_history_entry",
+            "title": "Restore a history entry as a saved request",
+            "description": "Create a saved request in a collection or folder from a recorded history entry.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_prop(),
+                    "entry_id": { "type": "string", "description": "History entry id from list_history." },
+                    "parent_id": { "type": "string", "description": "Optional target collection or folder id." }
+                },
+                "required": ["entry_id"]
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+        }),
     ]
 }
 
@@ -324,6 +383,10 @@ pub async fn call(server: &Server, name: &str, args: &Value) -> Result<ToolOutpu
         "list_saved_responses" => list_saved_responses(server, args, &perms),
         "list_cookies" => list_cookies(server, args),
         "clear_cookies" => clear_cookies(server, args),
+        "import_spec" => import_spec(server, args),
+        "move_item" => move_item(server, args),
+        "list_history" => list_history(server, args),
+        "restore_history_entry" => restore_history_entry(server, args),
         other => Err(format!("unknown tool `{other}`")),
     }?;
     if !perms.read_secrets {
@@ -337,13 +400,17 @@ pub async fn call(server: &Server, name: &str, args: &Value) -> Result<ToolOutpu
 // ------------------------------------------------------------ permissions
 
 const SETTINGS_HINT: &str =
-    "Ask the user to allow it in the http-trax app (AI agents, What agents can do).";
+    "Ask the user to allow it in the Courion app (AI agents, What agents can do).";
 
 fn check_allowed(tool: &str, perms: &AgentPermissions) -> Result<(), String> {
     let (allowed, what) = match tool {
-        "init_workspace" | "upsert_collection" | "upsert_request" | "delete_request" => {
-            (perms.edit_requests, "Create and edit requests")
-        }
+        "init_workspace"
+        | "upsert_collection"
+        | "upsert_request"
+        | "delete_request"
+        | "import_spec"
+        | "move_item"
+        | "restore_history_entry" => (perms.edit_requests, "Create and edit requests"),
         "run_request" | "run_collection" | "send_http_request" | "clear_cookies" => {
             (perms.run_requests, "Run requests and tests")
         }
@@ -1374,4 +1441,102 @@ fn clear_cookies(server: &Server, args: &Value) -> Result<ToolOutput, String> {
         server.record(&ws, ActivityKind::Deleted, what.clone());
     }
     Ok(ToolOutput::with(what, json!({ "removed": n })))
+}
+
+fn import_spec(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let content = req_str(args, "content")?;
+    let summary = ws.import_json(content).map_err(err)?;
+    let what = if !summary.collections.is_empty() {
+        format!(
+            "Imported {} collection(s) and {} request(s)",
+            summary.collections.len(),
+            summary.requests
+        )
+    } else if !summary.environments.is_empty() {
+        format!("Imported {} environment(s)", summary.environments.len())
+    } else {
+        format!("Imported {} request(s)", summary.requests)
+    };
+    server.record(&ws, ActivityKind::Created, what.clone());
+    Ok(ToolOutput::with(
+        if summary.warnings.is_empty() {
+            what
+        } else {
+            format!("{what} (warnings: {})", summary.warnings.join("; "))
+        },
+        serde_json::to_value(&summary).map_err(err)?,
+    ))
+}
+
+fn move_item(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let item_id = req_str(args, "item_id")?;
+    let target_parent_id = opt_str(args, "target_parent_id");
+    let before_id = opt_str(args, "before_id");
+    ws.move_item(item_id, target_parent_id, before_id)
+        .map_err(err)?;
+    let what = format!("Moved item {item_id}");
+    server.record(&ws, ActivityKind::Edited, what.clone());
+    Ok(ToolOutput::with(what, json!({ "moved": item_id })))
+}
+
+fn list_history(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let query = opt_str(args, "query").map(|q| q.trim().to_lowercase());
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50)
+        .max(1) as usize;
+    let entries: Vec<_> = ws
+        .history()
+        .map_err(err)?
+        .into_iter()
+        .filter(|e| match &query {
+            Some(q) if !q.is_empty() => {
+                e.name.to_lowercase().contains(q)
+                    || e.url.to_lowercase().contains(q)
+                    || e.method.to_lowercase().contains(q)
+                    || e.status.is_some_and(|s| s.to_string().contains(q))
+                    || e.environment
+                        .as_ref()
+                        .is_some_and(|env| env.to_lowercase().contains(q))
+            }
+            _ => true,
+        })
+        .take(limit)
+        .collect();
+    if entries.is_empty() {
+        return Ok(ToolOutput::with(
+            "No matching history entries.",
+            json!({ "entries": [] }),
+        ));
+    }
+    let mut text = String::new();
+    for e in &entries {
+        let status = match (e.status, &e.error) {
+            (Some(s), _) => s.to_string(),
+            (None, Some(err_msg)) => format!("ERR ({err_msg})"),
+            (None, None) => "—".into(),
+        };
+        text.push_str(&format!(
+            "- [{}] {} {} — {} ({})\n",
+            e.id, e.method, e.name, status, e.url
+        ));
+    }
+    Ok(ToolOutput::with(text, json!({ "entries": entries })))
+}
+
+fn restore_history_entry(server: &Server, args: &Value) -> Result<ToolOutput, String> {
+    let (ws, _) = workspace(server, args)?;
+    let entry_id = req_str(args, "entry_id")?;
+    let parent_id = opt_str(args, "parent_id");
+    let created = ws.restore_history_entry(entry_id, parent_id).map_err(err)?;
+    let what = format!("Restored request {} from history", created.name);
+    server.record(&ws, ActivityKind::Created, what.clone());
+    Ok(ToolOutput::with(
+        format!("{} [{}]", what, created.id),
+        serde_json::to_value(&created).map_err(err)?,
+    ))
 }

@@ -329,6 +329,37 @@ fn build_body(
     })
 }
 
+fn resolve_settings(
+    ws: &Workspace,
+    settings: &RequestSettings,
+    vars: &BTreeMap<String, String>,
+) -> RequestSettings {
+    let sub_opt = |opt: &Option<String>, is_path: bool| -> Option<String> {
+        let s = opt.as_ref()?;
+        let val = interpolate(s, vars).trim().to_string();
+        if val.is_empty() {
+            return None;
+        }
+        if is_path && !val.contains("-----BEGIN") {
+            let p = std::path::Path::new(&val);
+            if !p.is_absolute() {
+                return Some(ws.root().join(p).to_string_lossy().into_owned());
+            }
+        }
+        Some(val)
+    };
+    RequestSettings {
+        timeout_ms: settings.timeout_ms,
+        follow_redirects: settings.follow_redirects,
+        verify_tls: settings.verify_tls,
+        cookies: settings.cookies,
+        proxy_url: sub_opt(&settings.proxy_url, false),
+        ca_cert: sub_opt(&settings.ca_cert, true),
+        client_cert: sub_opt(&settings.client_cert, true),
+        client_key: sub_opt(&settings.client_key, true),
+    }
+}
+
 async fn run_script(
     source: String,
     input: trax_script::ScriptInput,
@@ -505,9 +536,13 @@ async fn execute(
     // 4. Auth. An OAuth 2.0 token is only fetched once the request is sure
     // to be sent (below).
     let mut oauth = None;
+    let mut sigv4 = None;
+    let mut digest_creds = None;
+    let mut ntlm_creds = None;
+    let resolved_settings = resolve_settings(ws, &request.settings, &vars);
     match effective_auth(request, ancestors) {
         Auth::OAuth2(cfg) if !has_header(&sent.headers, "authorization") => {
-            oauth = Some(oauth::Resolved::new(&cfg, &vars, &request.settings));
+            oauth = Some(oauth::Resolved::new(&cfg, &vars, &resolved_settings));
         }
         Auth::Bearer { token } if !has_header(&sent.headers, "authorization") => {
             sent.headers.push(Header::new(
@@ -524,6 +559,35 @@ async fn execute(
             let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
             sent.headers
                 .push(Header::new("Authorization", format!("Basic {encoded}")));
+        }
+        Auth::Digest { username, password } if !has_header(&sent.headers, "authorization") => {
+            digest_creds = Some((interpolate(&username, &vars), interpolate(&password, &vars)));
+        }
+        Auth::AwsSigV4 {
+            access_key,
+            secret_key,
+            region,
+            service,
+            session_token,
+        } if !has_header(&sent.headers, "authorization") => {
+            sigv4 = Some((
+                interpolate(&access_key, &vars),
+                interpolate(&secret_key, &vars),
+                interpolate(&region, &vars),
+                interpolate(&service, &vars),
+                interpolate(&session_token, &vars),
+            ));
+        }
+        Auth::Ntlm {
+            username,
+            password,
+            domain,
+        } if !has_header(&sent.headers, "authorization") => {
+            ntlm_creds = Some((
+                interpolate(&username, &vars),
+                interpolate(&password, &vars),
+                interpolate(&domain, &vars),
+            ));
         }
         Auth::ApiKey {
             key,
@@ -568,6 +632,30 @@ async fn execute(
             .retain(|h| !h.key.eq_ignore_ascii_case("content-type"));
     }
     sent.body = body.describe();
+
+    if let Some((access_key, secret_key, region, service, session_token)) = sigv4 {
+        let payload_bytes = match &body {
+            PreparedBody::Text(t) => t.as_bytes(),
+            _ => b"",
+        };
+        if let Err(e) = crate::auth::sign_aws_sigv4(
+            &sent.method,
+            &sent.url,
+            &mut sent.headers,
+            payload_bytes,
+            &access_key,
+            &secret_key,
+            &region,
+            &service,
+            &session_token,
+            chrono::Utc::now(),
+        ) {
+            result.error = Some(e);
+            result.request = sent;
+            return result;
+        }
+    }
+
     result.request = sent.clone();
 
     if !result.script_errors.is_empty() {
@@ -599,14 +687,14 @@ async fn execute(
     }
 
     // 5. Send. An explicit Cookie header bypasses the jar.
-    let jar = (request.settings.cookies && !has_header(&sent.headers, "cookie"))
+    let jar = (resolved_settings.cookies && !has_header(&sent.headers, "cookie"))
         .then(|| CookieJar::of(ws));
-    let http_req = HttpRequest {
+    let mut http_req = HttpRequest {
         method: sent.method.clone(),
         url: sent.url.clone(),
         headers: sent.headers.clone(),
         body,
-        settings: request.settings.clone(),
+        settings: resolved_settings,
         cookies: jar.clone(),
     };
     if let Some(cookie) = jar.as_ref().and_then(|j| j.header_for(&sent.url)) {
@@ -614,7 +702,75 @@ async fn execute(
         // jar on each redirect).
         result.request.headers.push(Header::new("Cookie", cookie));
     }
-    let sent_result = http::send(&http_req).await;
+    let mut sent_result = http::send(&http_req).await;
+
+    // Digest challenge-response handshake on 401.
+    if let (Some((username, password)), Ok(resp)) = (&digest_creds, &sent_result) {
+        if resp.status == 401 {
+            if let Some(www_auth) = resp
+                .headers
+                .iter()
+                .find(|h| h.key.eq_ignore_ascii_case("www-authenticate"))
+                .map(|h| h.value.as_str())
+            {
+                let payload_bytes = match &http_req.body {
+                    PreparedBody::Text(t) => t.as_bytes(),
+                    _ => b"",
+                };
+                if let Some(auth_val) = crate::auth::digest_authorization_header(
+                    www_auth,
+                    &sent.method,
+                    &sent.url,
+                    payload_bytes,
+                    username,
+                    password,
+                    "0a4f113b",
+                ) {
+                    set_header(&mut http_req.headers, "Authorization", auth_val.clone());
+                    set_header(&mut sent.headers, "Authorization", auth_val.clone());
+                    set_header(&mut result.request.headers, "Authorization", auth_val);
+                    sent_result = http::send(&http_req).await;
+                }
+            }
+        }
+    }
+
+    // NTLM handshake on 401.
+    if let (Some((username, password, domain)), Ok(resp)) = (&ntlm_creds, &sent_result) {
+        if resp.status == 401 {
+            let neg = crate::auth::ntlm_negotiate_header();
+            set_header(&mut http_req.headers, "Authorization", neg);
+            if let Ok(step2) = http::send(&http_req).await {
+                if step2.status == 401 {
+                    if let Some(www_auth) = step2
+                        .headers
+                        .iter()
+                        .find(|h| {
+                            h.key.eq_ignore_ascii_case("www-authenticate")
+                                && h.value.trim().len() > 5
+                        })
+                        .map(|h| h.value.as_str())
+                    {
+                        if let Some(auth_val) = crate::auth::ntlm_authenticate_header(
+                            www_auth,
+                            username,
+                            password,
+                            domain,
+                            [1, 2, 3, 4, 5, 6, 7, 8],
+                        ) {
+                            set_header(&mut http_req.headers, "Authorization", auth_val.clone());
+                            set_header(&mut sent.headers, "Authorization", auth_val.clone());
+                            set_header(&mut result.request.headers, "Authorization", auth_val);
+                            sent_result = http::send(&http_req).await;
+                        }
+                    }
+                } else {
+                    sent_result = Ok(step2);
+                }
+            }
+        }
+    }
+
     if let Some(jar) = &jar {
         if let Err(e) = jar.save() {
             result.logs.push(LogEntry {

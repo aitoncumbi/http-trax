@@ -10,6 +10,10 @@ rust-version.workspace = true
 name = "trax-mcp"
 path = "src/main.rs"
 
+[[bin]]
+name = "courion-mcp"
+path = "src/bin/courion-mcp.rs"
+
 [dependencies]
 trax-core.workspace = true
 serde.workspace = true

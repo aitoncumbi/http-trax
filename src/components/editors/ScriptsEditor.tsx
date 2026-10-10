@@ -109,8 +109,8 @@ export function ScriptsEditor({
             </button>
           ))}
           <p className="mt-3 text-[11.5px] leading-[17px]">
-            Postman-style <code className="font-mono">pm.*</code>, <code className="font-mono">expect(x).to.equal(y)</code>,{" "}
-            <code className="font-mono">await</code> and <code className="font-mono">btoa</code> also work.
+            <code className="font-mono">courion.*</code>, <code className="font-mono">trax.*</code>, Postman-style <code className="font-mono">pm.*</code>,{" "}
+            <code className="font-mono">expect(x).to.equal(y)</code>, <code className="font-mono">await</code> and <code className="font-mono">btoa</code> all work.
           </p>
         </aside>
       </div>

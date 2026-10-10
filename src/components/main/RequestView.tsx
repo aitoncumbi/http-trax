@@ -327,6 +327,70 @@ export function RequestView({ tab }: { tab: RequestTab }) {
                     className="input h-8 w-28 text-right font-mono text-[13px]"
                   />
                 </div>
+                <div className="flex flex-col gap-3.5 py-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="req-proxy" className="text-[14px]">
+                      Proxy URL
+                    </label>
+                    <div className="text-[12px] text-faint">Route this request through an HTTP, HTTPS or SOCKS5 proxy (supports {"{{variables}}"}).</div>
+                    <input
+                      id="req-proxy"
+                      placeholder="http://127.0.0.1:8080 or socks5://127.0.0.1:1080"
+                      value={r.settings?.proxyUrl ?? ""}
+                      onChange={(e) =>
+                        set({ settings: { followRedirects: true, verifyTls: true, ...r.settings, proxyUrl: e.target.value || undefined } })
+                      }
+                      className="input h-9 max-w-[520px] font-mono text-[13px]"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="req-ca-cert" className="text-[14px]">
+                      Custom CA certificate
+                    </label>
+                    <div className="text-[12px] text-faint">File path or inline PEM bundle to trust for internal or self-signed roots.</div>
+                    <textarea
+                      id="req-ca-cert"
+                      placeholder="/path/to/ca-bundle.pem or -----BEGIN CERTIFICATE-----"
+                      value={r.settings?.caCert ?? ""}
+                      onChange={(e) =>
+                        set({ settings: { followRedirects: true, verifyTls: true, ...r.settings, caCert: e.target.value || undefined } })
+                      }
+                      className="input min-h-[60px] max-w-[520px] py-1.5 font-mono text-[12px]"
+                    />
+                  </div>
+                  <div className="grid max-w-[520px] grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="req-client-cert" className="text-[14px]">
+                        Client certificate (mTLS)
+                      </label>
+                      <div className="text-[12px] text-faint">PEM path or inline certificate.</div>
+                      <textarea
+                        id="req-client-cert"
+                        placeholder="/path/to/client.crt or -----BEGIN CERTIFICATE-----"
+                        value={r.settings?.clientCert ?? ""}
+                        onChange={(e) =>
+                          set({ settings: { followRedirects: true, verifyTls: true, ...r.settings, clientCert: e.target.value || undefined } })
+                        }
+                        className="input min-h-[68px] py-1.5 font-mono text-[12px]"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="req-client-key" className="text-[14px]">
+                        Client private key (mTLS)
+                      </label>
+                      <div className="text-[12px] text-faint">PEM path or inline private key.</div>
+                      <textarea
+                        id="req-client-key"
+                        placeholder="/path/to/client.key or -----BEGIN PRIVATE KEY-----"
+                        value={r.settings?.clientKey ?? ""}
+                        onChange={(e) =>
+                          set({ settings: { followRedirects: true, verifyTls: true, ...r.settings, clientKey: e.target.value || undefined } })
+                        }
+                        className="input min-h-[68px] py-1.5 font-mono text-[12px]"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             {section === "docs" && (

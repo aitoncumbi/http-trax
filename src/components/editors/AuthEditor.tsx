@@ -12,8 +12,11 @@ const TYPES: { id: AuthType; label: string }[] = [
   { id: "none", label: "No auth" },
   { id: "bearer", label: "Bearer token" },
   { id: "basic", label: "Basic auth" },
+  { id: "digest", label: "Digest auth" },
   { id: "api-key", label: "API key" },
   { id: "oauth2", label: "OAuth 2.0" },
+  { id: "aws-sigv4", label: "AWS Signature v4" },
+  { id: "ntlm", label: "NTLM" },
 ];
 
 function make(type: AuthType): Auth {
@@ -25,10 +28,16 @@ function make(type: AuthType): Auth {
       return { type, token: "" };
     case "basic":
       return { type, username: "", password: "" };
+    case "digest":
+      return { type, username: "", password: "" };
     case "api-key":
       return { type, key: "X-Api-Key", value: "", location: "header" };
     case "oauth2":
       return { type, grant: "authorization-code", authUrl: "", tokenUrl: "", clientId: "", scope: "" };
+    case "aws-sigv4":
+      return { type, accessKey: "", secretKey: "", region: "us-east-1", service: "execute-api" };
+    case "ntlm":
+      return { type, username: "", password: "", domain: "" };
   }
 }
 
@@ -38,10 +47,16 @@ function describe(auth: Auth): string {
       return "a bearer token";
     case "basic":
       return `basic auth as ${auth.username || "…"}`;
+    case "digest":
+      return `digest auth as ${auth.username || "…"}`;
     case "api-key":
       return `the API key ${auth.key} in the ${auth.location}`;
     case "oauth2":
       return `OAuth 2.0 (${GRANTS.find((g) => g.id === auth.grant)?.short ?? auth.grant})`;
+    case "aws-sigv4":
+      return `AWS SigV4 (${auth.service || "service"} in ${auth.region || "region"})`;
+    case "ntlm":
+      return `NTLM as ${auth.domain ? `${auth.domain}\\` : ""}${auth.username || "…"}`;
     default:
       return "no auth";
   }
@@ -111,7 +126,7 @@ export function AuthEditor({
           </div>
         </div>
       )}
-      {auth.type === "basic" && (
+      {(auth.type === "basic" || auth.type === "digest") && (
         <div className="grid max-w-[620px] grid-cols-2 gap-3">
           <div className="flex flex-col gap-2">
             <span className="text-[13px] text-faint">Username</span>
@@ -132,6 +147,75 @@ export function AuthEditor({
                 placeholder="{{password}}"
                 onChange={(e) => onChange({ ...auth, password: e.target.value })}
               />
+            </div>
+          </div>
+        </div>
+      )}
+      {auth.type === "aws-sigv4" && (
+        <div className="flex max-w-[620px] flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-2">
+              <span className="text-[13px] text-faint">Access Key ID</span>
+              <div className={field}>
+                <VarInput aria-label="Access Key ID" value={auth.accessKey} placeholder="{{awsAccessKeyId}}" onChange={(accessKey) => onChange({ ...auth, accessKey })} className="h-full px-0.5" />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <span className="text-[13px] text-faint">Secret Access Key</span>
+              <div className={field}>
+                <VarInput aria-label="Secret Access Key" value={auth.secretKey} placeholder="{{awsSecretAccessKey}}" onChange={(secretKey) => onChange({ ...auth, secretKey })} className="h-full px-0.5" />
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-2">
+              <span className="text-[13px] text-faint">AWS Region</span>
+              <div className={field}>
+                <VarInput aria-label="AWS Region" value={auth.region} placeholder="us-east-1" onChange={(region) => onChange({ ...auth, region })} className="h-full px-0.5" />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <span className="text-[13px] text-faint">Service Name</span>
+              <div className={field}>
+                <VarInput aria-label="Service Name" value={auth.service} placeholder="execute-api / s3" onChange={(service) => onChange({ ...auth, service })} className="h-full px-0.5" />
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <span className="text-[13px] text-faint">Session Token (optional)</span>
+            <div className={field}>
+              <VarInput aria-label="Session Token" value={auth.sessionToken ?? ""} placeholder="{{awsSessionToken}}" onChange={(sessionToken) => onChange({ ...auth, sessionToken: sessionToken || undefined })} className="h-full px-0.5" />
+            </div>
+          </div>
+        </div>
+      )}
+      {auth.type === "ntlm" && (
+        <div className="grid max-w-[620px] grid-cols-3 gap-3">
+          <div className="flex flex-col gap-2">
+            <span className="text-[13px] text-faint">Username</span>
+            <div className={field}>
+              <VarInput aria-label="Username" value={auth.username} onChange={(username) => onChange({ ...auth, username })} className="h-full px-0.5" />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="ntlm-password" className="text-[13px] text-faint">
+              Password
+            </label>
+            <div className={field}>
+              <input
+                id="ntlm-password"
+                type="password"
+                className="h-full w-full bg-transparent px-3.5 outline-none placeholder:text-dim"
+                value={auth.password}
+                placeholder="{{password}}"
+                onChange={(e) => onChange({ ...auth, password: e.target.value })}
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <span className="text-[13px] text-faint">Domain (optional)</span>
+            <div className={field}>
+              <VarInput aria-label="Domain" value={auth.domain ?? ""} placeholder="WORKGROUP" onChange={(domain) => onChange({ ...auth, domain: domain || undefined })} className="h-full px-0.5" />
             </div>
           </div>
         </div>

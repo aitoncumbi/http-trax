@@ -111,7 +111,7 @@ export function CollectionsPanel() {
         title={scopedCollection ? "Collection" : "Collections"}
         actions={
           <>
-            <SidebarIconButton label="Import (cURL or Postman)" onClick={() => showImportDialog()}>
+            <SidebarIconButton label="Import (cURL, OpenAPI, Postman, HAR…)" onClick={() => showImportDialog()}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M8 3v7.5M5 7.5l3 3 3-3M3.5 13h9" />
               </svg>
@@ -162,19 +162,48 @@ export function CollectionsPanel() {
         {pinned.length > 0 && (
           <>
             <SectionLabel icon={<Star size={10} className="fill-current" />} label="Pinned" />
-            {pinned.map((c) => (
-              <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked expanded={expanded} toggle={toggle} forceOpen={false} />
+            {pinned.map((c, idx) => (
+              <GroupRow
+                key={c.meta.id}
+                node={c}
+                parentId={null}
+                nextSiblingId={pinned[idx + 1]?.meta.id ?? others[0]?.meta.id ?? null}
+                depth={0}
+                isCollection
+                bookmarked
+                expanded={expanded}
+                toggle={toggle}
+                forceOpen={false}
+              />
             ))}
             {others.length > 0 && <div className="mx-2 my-1.5 h-px bg-border" />}
           </>
         )}
-        {others.map((c) => (
-          <GroupRow key={c.meta.id} node={c} depth={0} isCollection bookmarked={false} expanded={expanded} toggle={toggle} forceOpen={false} />
+        {others.map((c, idx) => (
+          <GroupRow
+            key={c.meta.id}
+            node={c}
+            parentId={null}
+            nextSiblingId={others[idx + 1]?.meta.id ?? null}
+            depth={0}
+            isCollection
+            bookmarked={false}
+            expanded={expanded}
+            toggle={toggle}
+            forceOpen={false}
+          />
         ))}
       </nav>
     </div>
   );
 }
+
+interface DragPayload {
+  id: string;
+  kind: "request" | "folder" | "collection";
+}
+
+let activeDrag: DragPayload | null = null;
 
 function SectionLabel({ label, icon }: { label: string; icon?: React.ReactNode }) {
   return (
@@ -226,26 +255,90 @@ function groupMenu(node: GroupNode, isCollection: boolean, open: () => void): Me
 
 function GroupRow({
   node,
+  parentId,
+  nextSiblingId,
   depth,
   isCollection,
   bookmarked,
   ...props
-}: NodeProps & { node: GroupNode; depth: number; isCollection: boolean; bookmarked: boolean }) {
+}: NodeProps & {
+  node: GroupNode;
+  parentId: string | null;
+  nextSiblingId: string | null;
+  depth: number;
+  isCollection: boolean;
+  bookmarked: boolean;
+}) {
   const open = props.forceOpen || props.expanded.has(node.meta.id);
-  const { toggleBookmark, setScope, createRequest } = useStore.getState();
+  const { toggleBookmark, setScope, createRequest, moveItem } = useStore.getState();
   const scoped = useStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.prefs.scopedCollection === node.meta.id);
   const ctx = useContextMenu(() => groupMenu(node, isCollection, () => props.toggle(node.meta.id, true)));
   const count = countRequests(node.items);
+  const [dropPos, setDropPos] = useState<"before" | "inside" | "after" | null>(null);
 
   return (
     <div role="treeitem" aria-expanded={open} aria-selected={false}>
       <div className="relative">
         <Guides depth={depth} />
         <div
+          draggable
+          onDragStart={(e) => {
+            e.stopPropagation();
+            activeDrag = { id: node.meta.id, kind: isCollection ? "collection" : "folder" };
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", node.meta.id);
+          }}
+          onDragEnd={() => {
+            activeDrag = null;
+            setDropPos(null);
+          }}
+          onDragOver={(e) => {
+            if (!activeDrag || activeDrag.id === node.meta.id) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            const rel = (e.clientY - rect.top) / rect.height;
+            if (activeDrag.kind === "collection") {
+              if (!isCollection) return;
+              setDropPos(rel < 0.5 ? "before" : "after");
+            } else if (isCollection) {
+              setDropPos("inside");
+            } else {
+              if (rel < 0.25) setDropPos("before");
+              else if (rel > 0.75) setDropPos("after");
+              else setDropPos("inside");
+            }
+          }}
+          onDragLeave={() => setDropPos(null)}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const dragged = activeDrag;
+            const pos = dropPos;
+            setDropPos(null);
+            activeDrag = null;
+            if (!dragged || !pos || dragged.id === node.meta.id) return;
+            if (dragged.kind === "collection" && isCollection) {
+              const beforeId = pos === "before" ? node.meta.id : nextSiblingId;
+              if (beforeId !== dragged.id) void moveItem(dragged.id, null, beforeId);
+            } else if (pos === "inside") {
+              props.toggle(node.meta.id, true);
+              void moveItem(dragged.id, node.meta.id, null);
+            } else if (parentId) {
+              const beforeId = pos === "before" ? node.meta.id : nextSiblingId;
+              if (beforeId !== dragged.id) void moveItem(dragged.id, parentId, beforeId);
+            }
+          }}
           onContextMenu={ctx.open}
-          className={cx("group flex h-[30px] items-center rounded-[7px] pr-1 hover:bg-hover", ctx.isOpen && "bg-hover")}
+          className={cx(
+            "group relative flex h-[30px] items-center rounded-[7px] pr-1 hover:bg-hover",
+            ctx.isOpen && "bg-hover",
+            dropPos === "inside" && "bg-accent-soft ring-1 ring-accent-line",
+          )}
           style={{ paddingLeft: 8 + depth * INDENT }}
         >
+          {dropPos === "before" && <span className="pointer-events-none absolute right-1 top-0 left-2 h-[2px] rounded bg-accent-line" />}
+          {dropPos === "after" && <span className="pointer-events-none absolute right-1 bottom-0 left-2 h-[2px] rounded bg-accent-line" />}
           <button
             type="button"
             className="flex h-full min-w-0 flex-1 items-center gap-2 text-left text-[13.5px] text-text"
@@ -308,13 +401,17 @@ function GroupRow({
           {!open && count > 0 && <span className="w-5 text-right text-[12px] text-faint group-hover:hidden">{count}</span>}
         </div>
       </div>
-      {open && <Items items={node.items} depth={depth + 1} {...props} />}
+      {open && <Items items={node.items} parentId={node.meta.id} depth={depth + 1} {...props} />}
       {ctx.menu}
     </div>
   );
 }
 
-function Items({ items, depth, ...props }: NodeProps & { items: TreeItem[]; depth: number }) {
+function itemIdOf(item: TreeItem): string {
+  return item.kind === "folder" ? item.meta.id : item.id;
+}
+
+function Items({ items, parentId, depth, ...props }: NodeProps & { items: TreeItem[]; parentId: string; depth: number }) {
   if (items.length === 0) {
     return (
       <div className="relative">
@@ -327,21 +424,42 @@ function Items({ items, depth, ...props }: NodeProps & { items: TreeItem[]; dept
   }
   return (
     <div role="group" className="flex flex-col gap-px">
-      {items.map((item) =>
-        item.kind === "folder" ? (
-          <GroupRow key={item.meta.id} node={item} depth={depth} isCollection={false} bookmarked={false} {...props} />
+      {items.map((item, idx) => {
+        const nextSiblingId = items[idx + 1] ? itemIdOf(items[idx + 1]) : null;
+        return item.kind === "folder" ? (
+          <GroupRow
+            key={item.meta.id}
+            node={item}
+            parentId={parentId}
+            nextSiblingId={nextSiblingId}
+            depth={depth}
+            isCollection={false}
+            bookmarked={false}
+            {...props}
+          />
         ) : (
-          <RequestRow key={item.id} request={item} depth={depth} />
-        ),
-      )}
+          <RequestRow key={item.id} request={item} parentId={parentId} nextSiblingId={nextSiblingId} depth={depth} />
+        );
+      })}
     </div>
   );
 }
 
-function RequestRow({ request, depth }: { request: RequestSummary; depth: number }) {
+function RequestRow({
+  request,
+  parentId,
+  nextSiblingId,
+  depth,
+}: {
+  request: RequestSummary;
+  parentId: string;
+  nextSiblingId: string | null;
+  depth: number;
+}) {
   const { active } = useWorkspaceTabs();
-  const { openRequest, duplicateRequest, deleteRequest } = useStore.getState();
+  const { openRequest, duplicateRequest, deleteRequest, moveItem } = useStore.getState();
   const selected = active?.kind === "request" && active.requestId === request.id;
+  const [dropPos, setDropPos] = useState<"before" | "after" | null>(null);
   const ctx = useContextMenu(() => [
     { label: "Open", onSelect: () => void openRequest(request.id) },
     { label: "Duplicate", icon: <Copy size={14} />, onSelect: () => void duplicateRequest(request.id) },
@@ -356,7 +474,37 @@ function RequestRow({ request, depth }: { request: RequestSummary; depth: number
       <button
         type="button"
         role="treeitem"
+        draggable
         aria-selected={selected}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          activeDrag = { id: request.id, kind: "request" };
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", request.id);
+        }}
+        onDragEnd={() => {
+          activeDrag = null;
+          setDropPos(null);
+        }}
+        onDragOver={(e) => {
+          if (!activeDrag || activeDrag.kind === "collection" || activeDrag.id === request.id) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = e.currentTarget.getBoundingClientRect();
+          setDropPos(e.clientY - rect.top < rect.height / 2 ? "before" : "after");
+        }}
+        onDragLeave={() => setDropPos(null)}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const dragged = activeDrag;
+          const pos = dropPos;
+          setDropPos(null);
+          activeDrag = null;
+          if (!dragged || !pos || dragged.kind === "collection" || dragged.id === request.id) return;
+          const beforeId = pos === "before" ? request.id : nextSiblingId;
+          if (beforeId !== dragged.id) void moveItem(dragged.id, parentId, beforeId);
+        }}
         onClick={() => void openRequest(request.id)}
         onContextMenu={ctx.open}
         title={`${request.method} ${request.url}`}
@@ -367,6 +515,8 @@ function RequestRow({ request, depth }: { request: RequestSummary; depth: number
         )}
         style={{ paddingLeft: 12 + depth * INDENT }}
       >
+        {dropPos === "before" && <span className="pointer-events-none absolute right-1 top-0 left-2 h-[2px] rounded bg-accent-line" />}
+        {dropPos === "after" && <span className="pointer-events-none absolute right-1 bottom-0 left-2 h-[2px] rounded bg-accent-line" />}
         {selected && <span className="absolute top-0 bottom-0 left-0 w-[3px] rounded-sm bg-accent-line" />}
         <MethodPill method={request.method} />
         <span className="truncate">{request.name}</span>

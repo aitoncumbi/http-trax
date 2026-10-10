@@ -60,27 +60,51 @@ pub struct HttpRequest {
     pub cookies: Option<Arc<CookieJar>>,
 }
 
-type ClientKey = (bool, bool, Option<PathBuf>);
-
-/// Clients are cached per (follow redirects, verify TLS, cookie jar) so
-/// connection pools are reused across requests.
-fn client(
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ClientKey {
     follow_redirects: bool,
     verify_tls: bool,
-    jar: Option<&Arc<CookieJar>>,
-) -> Result<Client, String> {
+    jar_path: Option<PathBuf>,
+    proxy_url: Option<String>,
+    ca_cert: Option<String>,
+    client_cert: Option<String>,
+    client_key: Option<String>,
+}
+
+fn load_pem_bytes(raw: &str) -> Result<Vec<u8>, String> {
+    let trimmed = raw.trim();
+    if trimmed.contains("-----BEGIN") {
+        Ok(trimmed.as_bytes().to_vec())
+    } else {
+        std::fs::read(trimmed)
+            .map_err(|e| format!("could not read certificate/key file {trimmed:?}: {e}"))
+    }
+}
+
+/// Clients are cached per (follow redirects, verify TLS, cookie jar, proxy, certs) so
+/// connection pools are reused across requests.
+fn client(settings: &RequestSettings, jar: Option<&Arc<CookieJar>>) -> Result<Client, String> {
     static CLIENTS: OnceLock<Mutex<HashMap<ClientKey, Client>>> = OnceLock::new();
     let cache = CLIENTS.get_or_init(Default::default);
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    let key = (
-        follow_redirects,
-        verify_tls,
-        jar.map(|j| j.path().to_path_buf()),
-    );
+    let norm = |opt: &Option<String>| {
+        opt.as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let key = ClientKey {
+        follow_redirects: settings.follow_redirects,
+        verify_tls: settings.verify_tls,
+        jar_path: jar.map(|j| j.path().to_path_buf()),
+        proxy_url: norm(&settings.proxy_url),
+        ca_cert: norm(&settings.ca_cert),
+        client_cert: norm(&settings.client_cert),
+        client_key: norm(&settings.client_key),
+    };
     if let Some(c) = cache.get(&key) {
         return Ok(c.clone());
     }
-    let policy = if follow_redirects {
+    let policy = if settings.follow_redirects {
         redirect::Policy::limited(10)
     } else {
         redirect::Policy::none()
@@ -88,10 +112,43 @@ fn client(
     let mut builder = Client::builder()
         .user_agent(USER_AGENT)
         .redirect(policy)
-        .tls_danger_accept_invalid_certs(!verify_tls)
+        .tls_danger_accept_invalid_certs(!settings.verify_tls)
         .connect_timeout(Duration::from_secs(15));
     if let Some(jar) = jar {
         builder = builder.cookie_provider(jar.clone());
+    }
+    if let Some(proxy_url) = &key.proxy_url {
+        let proxy = reqwest::Proxy::all(proxy_url)
+            .map_err(|e| format!("invalid proxy URL {proxy_url:?}: {e}"))?;
+        builder = builder.proxy(proxy);
+    }
+    if let Some(ca) = &key.ca_cert {
+        let pem = load_pem_bytes(ca)?;
+        match reqwest::Certificate::from_pem_bundle(&pem) {
+            Ok(certs) => {
+                for cert in certs {
+                    builder = builder.add_root_certificate(cert);
+                }
+            }
+            Err(_) => {
+                let cert = reqwest::Certificate::from_pem(&pem)
+                    .map_err(|e| format!("invalid CA certificate PEM: {e}"))?;
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+    }
+    if let Some(cert_src) = &key.client_cert {
+        let mut pem = load_pem_bytes(cert_src)?;
+        if let Some(key_src) = &key.client_key {
+            let key_pem = load_pem_bytes(key_src)?;
+            if !pem.ends_with(b"\n") {
+                pem.push(b'\n');
+            }
+            pem.extend_from_slice(&key_pem);
+        }
+        let identity = reqwest::Identity::from_pem(&pem)
+            .map_err(|e| format!("invalid client certificate/key PEM for mTLS: {e}"))?;
+        builder = builder.identity(identity);
     }
     let client = builder
         .build()
@@ -116,11 +173,7 @@ pub async fn send(req: &HttpRequest) -> Result<ResponseData, String> {
         .map_err(|_| format!("invalid HTTP method {:?}", req.method))?;
     let url = url::Url::parse(&normalise_url(&req.url))
         .map_err(|e| format!("invalid URL {:?}: {e}", req.url))?;
-    let client = client(
-        req.settings.follow_redirects,
-        req.settings.verify_tls,
-        req.cookies.as_ref(),
-    )?;
+    let client = client(&req.settings, req.cookies.as_ref())?;
     let timeout =
         Duration::from_millis(req.settings.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).max(1));
 

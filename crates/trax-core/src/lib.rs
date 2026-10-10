@@ -6,6 +6,7 @@
 //! in the app and vice versa.
 
 pub mod agents;
+pub mod auth;
 pub mod cookies;
 pub mod diff;
 pub mod error;

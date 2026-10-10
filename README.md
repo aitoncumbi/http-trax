@@ -4,25 +4,25 @@ A desktop API client in the spirit of Postman, built around git. Your collection
 
 Built with Rust and Tauri 2 (backend and desktop shell) and Next.js (UI). Runs on Linux and Windows.
 
-The app's interface carries the name **Courion**. The project, installers, binaries (`http-trax`, `trax-mcp`) and the `trax.*` script API keep the http-trax name for now.
+The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, plus `http-trax` / `trax-mcp` aliases), MCP server (`courion`), and script API (`courion.*` and `trax.*`) all support the **Courion** name while preserving full backwards compatibility with `http-trax` / `trax`.
 
 ![Request editor](docs/screenshots/request.png)
 
 ## Features
 
-- **Workspaces for every team.** A workspace is a folder you keep in git: its own repo for a team's shared collections, or `api-tests/` inside a service repo. Switch between as many as you need; the switcher groups them by team. Create one, open an existing folder, or clone a team repository.
-- **Bookmarks and scope.** Star a collection to pin it to the top. Use the crosshair to scope the sidebar to one collection and hide everything else.
+- **Workspaces for every team.** A workspace is a folder you keep in git: its own repo for a team's shared collections, or `api-tests/` inside a service repo. Switch between as many as you need; the switcher groups them by team. Create one, open an existing folder, or clone a team repository. Large workspaces use an in-memory index with instant invalidation.
+- **Bookmarks, scope, and drag-and-drop.** Star a collection to pin it to the top. Use the crosshair to scope the sidebar to one collection and hide everything else. Drag and drop requests, folders and collections to reorder or move them across folders.
 - **Full git workflow.** Stage, commit, fetch, pull (merge, rebase or fast-forward only), push, branches, merge with conflict resolution, history, and a pull-request style **review** of any branch (commits, changed requests, diff, conflict check) with a one-click link to open the PR on GitHub, GitLab, Bitbucket or Azure DevOps.
 - **Always online.** A background worker fetches every workspace and fast-forwards when it's safe (no local commits, no uncommitted edits), so teammates' changes simply appear. It never merges or touches your work.
-- **Scripts.** JavaScript pre-request and post-response scripts at request, folder and collection level, with tests and assertions (`trax.test`, `trax.expect`), variable chaining, and a Postman-compatible `pm.*` subset. Scripts run in a sandbox with no file or network access.
+- **Scripts.** JavaScript pre-request and post-response scripts at request, folder and collection level, with tests and assertions (`courion.test` / `trax.test`, `courion.expect` / `trax.expect`), variable chaining, and a Postman-compatible `pm.*` subset. Scripts run in a sandbox with no file or network access.
 - **Saved responses.** Keep known-good responses as examples on a request. They're committed with the workspace.
 - **Readable reviews.** Source control shows what changed in a request or environment ("URL changed", "Header added", "Test added") instead of raw YAML, with the line diff one click away.
-- **Fast to drive from the keyboard.** Ctrl+K searches every request and command (Ctrl+. for actions), Ctrl+N creates a request, and a pasted cURL command becomes a request. Recent runs are listed under History, HTML responses can be previewed safely.
-- **OAuth 2.0 without the busywork.** Authorization code with PKCE (sign in once in your browser), client credentials, device code and password grants. Tokens are cached on your machine, refreshed when they expire, and fetched automatically when no sign-in is needed, for you and for agents.
-- **Everyday tools.** `{{variable}}` autocomplete with the resolved value on hover; copy any request as cURL or as fetch, axios, Python, Go or Rust code; search, filter (JSONPath), wrap and save responses; and a per-workspace cookie jar with a cookie manager, so login flows just work.
+- **Fast to drive from the keyboard.** Configurable keyboard shortcuts: Ctrl+K searches every request and command (Ctrl+. for actions), Ctrl+N creates a request, and a pasted cURL command becomes a request. Search recent runs under History and restore any history entry as a saved request. HTML responses can be previewed safely.
+- **Complete auth & TLS.** OAuth 2.0 (authorization code with PKCE, client credentials, device code, password grants, `private_key_jwt` client assertions, and RFC 7662 token introspection), Bearer, Basic, Digest (MD5/SHA-256), AWS Signature v4, NTLM, and API keys. Per-request HTTP/HTTPS/SOCKS5 proxy, custom CA certificates, and client certificates (mTLS).
+- **Everyday tools.** `{{variable}}` autocomplete with the resolved value on hover; copy any request as cURL or as fetch, axios, Python, Go or Rust code; search, filter (JSONPath & JMESPath), wrap, save responses, and virtualized rendering for multi-megabyte responses; plus a per-workspace cookie jar with a cookie manager.
 - **Environments done right for git.** Shared values are committed; secrets and values your scripts set (like fresh tokens) stay on your machine. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
-- **MCP server for AI agents.** `trax-mcp` ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
-- **Bring your Postman collections.** Import Postman collections and environments; `pm.*` scripts keep working.
+- **MCP server for AI agents.** `courion-mcp` (`trax-mcp`) ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
+- **Import from anywhere.** Import OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments with example responses, HAR archives, Insomnia exports, and Bruno collections; `pm.*` scripts keep working.
 
 ![Source control](docs/screenshots/source-control.png)
 
@@ -30,16 +30,16 @@ The app's interface carries the name **Courion**. The project, installers, binar
 
 ## Install
 
-Download the latest installers from the [releases page](https://github.com/aitoncumbi/http-trax/releases): `.deb`, `.rpm` and `.AppImage` for Linux, `.msi` and a setup `.exe` for Windows, plus standalone `trax-mcp` binaries. Pushing a version tag (`v0.2.0`) builds and publishes a new release automatically; the installers appear on it about 20 minutes later, once the builds finish. Every CI run also uploads the installers as build artifacts.
+Download the latest installers from the [releases page](https://github.com/aitoncumbi/http-trax/releases): `.deb`, `.rpm` and `.AppImage` for Linux, `.msi` and a setup `.exe` for Windows, plus standalone `courion-mcp` / `trax-mcp` binaries. Pushing a version tag (`v0.2.0`) builds and publishes a new release automatically; the installers appear on it about 20 minutes later, once the builds finish. Every CI run also uploads the installers as build artifacts.
 
-http-trax uses your installed `git` for all repository operations, so your existing credentials (SSH keys, Git Credential Manager, `gh auth`) just work.
+Courion uses your installed `git` for all repository operations, so your existing credentials (SSH keys, Git Credential Manager, `gh auth`) just work.
 
 ## Connect an AI agent (MCP)
 
 Open the **AI agents** panel in the app for ready-to-paste configs with the right path. For Claude Code:
 
 ```sh
-claude mcp add http-trax -- trax-mcp --workspace ./api-tests
+claude mcp add courion -- courion-mcp --workspace ./api-tests
 ```
 
 For clients that use an `mcp.json`:
@@ -47,7 +47,7 @@ For clients that use an `mcp.json`:
 ```json
 {
   "mcpServers": {
-    "http-trax": { "command": "trax-mcp", "args": ["--workspace", "./api-tests"] }
+    "courion": { "command": "courion-mcp", "args": ["--workspace", "./api-tests"] }
   }
 }
 ```
@@ -60,9 +60,12 @@ Leave out `--workspace` to use whichever workspace is active in the app. The age
 | `upsert_environment` | Create/update an environment, e.g. `baseUrl=http://localhost:8080` |
 | `upsert_collection` | Collection-level variables, headers, auth and scripts |
 | `upsert_request` | Add or update a request, including test scripts |
+| `move_item` | Move or reorder a request, folder, or collection |
+| `import_spec` | Import an OpenAPI, Postman, HAR, Insomnia, or Bruno spec/export into the workspace |
 | `run_request` / `run_collection` | Run and report status, tests, console output and body |
 | `send_http_request` | One-off request that isn't saved |
-| `get_workspace`, `get_request`, `list_environments`, `list_workspaces`, `list_saved_responses`, `delete_request` | Read and tidy up |
+| `list_history` / `restore_history_entry` | Search recent run history or restore a history run as a saved request |
+| `get_workspace`, `get_request`, `list_environments`, `list_workspaces`, `list_saved_responses`, `delete_request`, `list_cookies`, `clear_cookies` | Read and tidy up |
 
 ## Scripting in 30 seconds
 

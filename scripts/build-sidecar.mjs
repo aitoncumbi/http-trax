@@ -36,12 +36,15 @@ console.log(`[sidecar] cargo ${cargoArgs.join(" ")}`);
 execFileSync("cargo", cargoArgs, { cwd: root, stdio: "inherit" });
 
 const exe = target.includes("windows") ? ".exe" : "";
+const targetRoot = process.env.CARGO_TARGET_DIR || join(root, "target");
 const built = explicitTarget
-  ? join(root, "target", target, profile, `trax-mcp${exe}`)
-  : join(root, "target", profile, `trax-mcp${exe}`);
+  ? join(targetRoot, target, profile, `trax-mcp${exe}`)
+  : join(targetRoot, profile, `trax-mcp${exe}`);
 const destDir = join(root, "src-tauri", "binaries");
-const dest = join(destDir, `trax-mcp-${target}${exe}`);
 mkdirSync(destDir, { recursive: true });
-copyFileSync(built, dest);
-if (!exe) chmodSync(dest, 0o755);
-console.log(`[sidecar] ${dest}`);
+for (const binName of ["courion-mcp", "trax-mcp"]) {
+  const dest = join(destDir, `${binName}-${target}${exe}`);
+  copyFileSync(built, dest);
+  if (!exe) chmodSync(dest, 0o755);
+  console.log(`[sidecar] ${dest}`);
+}
