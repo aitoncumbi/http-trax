@@ -5339,6 +5339,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "trax-cli"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+ "trax-core",
+ "wiremock",
+]
+
+[[package]]
 name = "trax-core"
 version = "0.1.0"
 dependencies = [

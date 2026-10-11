@@ -43,7 +43,9 @@ pub use pr::{
     PullRequest, ReviewComment,
 };
 pub use registry::{Registry, SyncSettings, WorkspaceEntry, WorkspacePrefs};
-pub use runner::{run_draft, run_group, run_saved, save_run_response, RunOptions};
+pub use runner::{
+    run_draft, run_group, run_group_with_progress, run_saved, save_run_response, RunOptions,
+};
 pub use template::{
     apply_onboarding_spec, build_onboarding_link, create_workspace_from_template,
     list_workspace_templates, parse_onboarding_link, OnboardingSpec, WorkspaceTemplate,

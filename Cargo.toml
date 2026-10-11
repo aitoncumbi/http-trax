@@ -5,6 +5,7 @@ members = [
     "crates/trax-script",
     "crates/trax-git",
     "crates/trax-mcp",
+    "crates/trax-cli",
     "src-tauri",
 ]
 # The Tauri app needs WebKitGTK headers on Linux. Keep plain `cargo test`
@@ -15,6 +16,7 @@ default-members = [
     "crates/trax-script",
     "crates/trax-git",
     "crates/trax-mcp",
+    "crates/trax-cli",
 ]
 
 [workspace.package]
