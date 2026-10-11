@@ -133,7 +133,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     "variables": { "type": "object", "description": "Collection variables, e.g. {\"apiVersion\": \"v1\"}." },
                     "headers": { "type": "object", "description": "Headers added to every request, e.g. {\"Accept\": \"application/json\"}." },
                     "auth": { "type": "object", "description": "{\"type\": \"bearer\", \"token\": \"{{token}}\"} | {\"type\": \"basic\", \"username\", \"password\"} | {\"type\": \"api-key\", \"key\", \"value\", \"location\": \"header\"|\"query\"} | {\"type\": \"oauth2\", \"grant\": \"client-credentials\"|\"password\"|\"authorization-code\"|\"device-code\", \"tokenUrl\", \"clientId\", \"clientSecret\": \"{{clientSecret}}\", \"scope\", \"authUrl\", \"deviceAuthUrl\", \"extraParams\": [{\"key\": \"audience\", \"value\": \"...\"}]} (tokens are fetched, cached and refreshed automatically; authorization-code and device-code need the user to sign in once in the app) | {\"type\": \"none\"}" },
-                    "scripts": { "type": "object", "description": format!("{{\"preRequest\": \"...\", \"postResponse\": \"...\"}} run around every request. {SCRIPT_HELP}") }
+                    "scripts": { "type": "object", "description": format!("{{\"preRequest\": \"...\", \"postResponse\": \"...\"}} run around every request. {SCRIPT_HELP}") },
+                    "contract": { "description": "Check every response in the collection against an OpenAPI 3.x or Swagger 2.0 document: {\"openapi\": \"../openapi.yaml\"} (path relative to the workspace root). Each run then gets a \"contract: METHOD /path\" test that fails on an undocumented path, status or content type, a missing required header, or a body that doesn't match the schema. null removes it." }
                 },
                 "required": ["name"]
             },
@@ -159,7 +160,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     "body": { "description": "A JSON value (sent as JSON), a string, or {\"mode\": \"json\"|\"text\"|\"xml\"|\"form-urlencoded\"|\"multipart\"|\"graphql\", ...}." },
                     "auth": { "type": "object", "description": "Same shapes as upsert_collection.auth, or {\"type\": \"inherit\"} (default)." },
                     "scripts": { "type": "object", "description": "{\"preRequest\": \"...\", \"postResponse\": \"...\"}" },
-                    "settings": { "type": "object", "description": "{\"timeoutMs\": 30000, \"followRedirects\": true, \"verifyTls\": true}" }
+                    "settings": { "type": "object", "description": "{\"timeoutMs\": 30000, \"followRedirects\": true, \"verifyTls\": true}" },
+                    "contract": { "description": "Override the contract inherited from the collection or folders: {\"schema\": \"schemas/user.json\"} (JSON Schema for the body), {\"openapi\": \"other.yaml\"}, or {\"off\": true}. null inherits again." }
                 },
                 "required": ["collection", "name"]
             },
@@ -1046,6 +1048,9 @@ fn upsert_collection(server: &Server, args: &Value) -> Result<ToolOutput, String
         meta.scripts =
             serde_json::from_value(current).map_err(|e| format!("invalid scripts: {e}"))?;
     }
+    if let Some(c) = args.get("contract") {
+        meta.contract = args::contract(c)?;
+    }
     ws.update_group(&meta).map_err(err)?;
     server.record(
         &ws,
@@ -1148,6 +1153,12 @@ fn upsert_request(server: &Server, args: &Value) -> Result<ToolOutput, String> {
         let mut settings = serde_json::to_value(&base.settings).map_err(err)?;
         merge(&mut settings, v);
         overlay.insert("settings".into(), settings);
+    }
+    if let Some(v) = args.get("contract") {
+        overlay.insert(
+            "contract".into(),
+            serde_json::to_value(args::contract(v)?).map_err(err)?,
+        );
     }
     merge(&mut value, &Value::Object(overlay));
     let request: Request =

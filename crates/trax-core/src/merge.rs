@@ -710,6 +710,23 @@ pub fn semantic_merge(
                 },
             );
 
+            let contract = ctx.scalar(
+                "contract",
+                "Contract",
+                "contract",
+                "Contract",
+                &b.contract,
+                &o.contract,
+                &t.contract,
+                |c| {
+                    c.as_ref().and_then(|c| {
+                        serde_yaml_ng::to_string(c)
+                            .ok()
+                            .map(|s| s.trim().to_string())
+                    })
+                },
+            );
+
             let merged = Request {
                 id: o.id,
                 name,
@@ -726,6 +743,7 @@ pub fn semantic_merge(
                     post_response,
                 },
                 settings,
+                contract,
             };
             serde_yaml_ng::to_string(&merged).ok()?
         }
@@ -811,6 +829,22 @@ pub fn semantic_merge(
                 &o.scripts.post_response,
                 &t.scripts.post_response,
             );
+            let contract = ctx.scalar(
+                "contract",
+                "Contract",
+                "contract",
+                "Contract",
+                &b.contract,
+                &o.contract,
+                &t.contract,
+                |c| {
+                    c.as_ref().and_then(|c| {
+                        serde_yaml_ng::to_string(c)
+                            .ok()
+                            .map(|s| s.trim().to_string())
+                    })
+                },
+            );
             let merged = GroupMeta {
                 id: o.id,
                 name,
@@ -823,6 +857,7 @@ pub fn semantic_merge(
                     pre_request,
                     post_response,
                 },
+                contract,
             };
             serde_yaml_ng::to_string(&merged).ok()?
         }
@@ -1051,5 +1086,31 @@ mod tests {
         let merged: Request = serde_yaml_ng::from_str(&resolved.merged_yaml).unwrap();
         assert_eq!(merged.url, "{{baseUrl}}/v3/users");
         assert_eq!(merged.headers[0].value, "2-ours");
+    }
+
+    #[test]
+    fn keeps_a_contract_added_on_one_side() {
+        let base = GroupMeta::new("Orders");
+        let mut ours = base.clone();
+        ours.contract = Some(Contract {
+            openapi: "../openapi.yaml".into(),
+            ..Default::default()
+        });
+        let mut theirs = base.clone();
+        theirs.description = "Order API".into();
+
+        let yaml = |g: &GroupMeta| serde_yaml_ng::to_string(g).unwrap();
+        let preview = semantic_merge(
+            "collections/orders/collection.yaml",
+            Some(&yaml(&base)),
+            Some(&yaml(&ours)),
+            Some(&yaml(&theirs)),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(preview.can_auto_merge);
+        let merged: GroupMeta = serde_yaml_ng::from_str(&preview.merged_yaml).unwrap();
+        assert_eq!(merged.contract, ours.contract);
+        assert_eq!(merged.description, "Order API");
     }
 }

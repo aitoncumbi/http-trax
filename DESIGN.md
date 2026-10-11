@@ -128,11 +128,22 @@ The runner (`trax-core/src/runner.rs`) follows Postman's order so existing habit
 4. Apply auth (bearer, basic, API key in header or query, OAuth 2.0). The closest non-`inherit` auth wins, and an explicit `Authorization` header always wins. An OAuth 2.0 token is only fetched once the pre-request scripts have passed, right before sending.
 5. Send with `reqwest` (rustls with the OS certificate store; HTTP/2; gzip/brotli/deflate; per-request timeout, redirect and TLS-verification settings). Cookies come from the workspace cookie jar (below).
 6. Run post-response scripts (collection → folders → request) and collect tests and logs.
-7. Persist variable changes to local state.
+7. Check the response against the contract, if one applies (below).
+8. Persist variable changes to local state.
 
 A failing pre-request script stops the request from being sent. Errors are values, not exceptions: a `RunResult` always comes back, carrying the transport error, script errors, tests and logs, so the UI and agents can show exactly what happened.
 
 Collection runs execute requests depth-first in display order and share one variable session, so a login request can feed a token to every request after it.
+
+### Contract checks
+
+A collection or folder can name an OpenAPI document, and a request a JSON Schema file (`contract:` in their YAML, `trax_core::contract`). The nearest setting applies, so a folder can point at another spec and a request can opt out with `off: true`.
+
+- **One test per response**, "contract: GET /users/{id}", added after the scripts' tests. It fails with every violation at once: an undocumented path or method, an undocumented status (exact code, then `4XX`, then `default`), an undocumented content type, a missing required response header, no body where one is documented, or schema errors (the first five, each with its JSON pointer). Being a test, it shows up in the app, in MCP results and in CLI reports with nothing extra, and it fails a collection run like any other test.
+- **Matching** strips each server URL's path (variables at their defaults) or Swagger's `basePath`, then tries none, and compares segments: literals must be equal, `{param}` takes at least one character, and partial templates (`{name}.{ext}`) work. The template with the method wins, then the longest server prefix, then the most literal characters, so `/users/me` beats `/users/{id}` but `DELETE /users/me` still finds `DELETE /users/{id}`.
+- **Validation** uses the `jsonschema` crate without its HTTP and file retrievers: only local `$ref`s resolve (the spec's `components` and `definitions` are put next to the response schema). OpenAPI 3.0 and Swagger 2.0 schemas are validated as draft 4 (`exclusiveMinimum: true`, `$ref` siblings ignored), with 3.0's `nullable: true` rewritten to allow `null`; OpenAPI 3.1 as draft 2020-12; a standalone schema file by its own `$schema`. Formats are not checked, as in most OpenAPI tooling, because servers rarely agree on `date-time` or `email` edge cases and a contract test should fail on real drift.
+- **Paths are relative to the workspace root and may leave it** (`../openapi.yaml`): in a service repository the spec usually lives next to the code, not inside `api-tests/`. Documents are parsed once and cached until the file changes. Missing or unparseable files fail the contract test with the reason rather than the run.
+- The field is optional, so `FORMAT_VERSION` stays at 1. The semantic diff reports "Contract added/changed/removed", and the semantic merge treats it as one field.
 
 ### OAuth 2.0
 

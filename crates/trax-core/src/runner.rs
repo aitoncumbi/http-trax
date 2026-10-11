@@ -9,7 +9,8 @@
 //! 4. Apply auth (an explicit `Authorization` header wins).
 //! 5. Send.
 //! 6. Run post-response scripts, collection first; collect tests and logs.
-//! 7. Persist variable changes to the workspace's local state.
+//! 7. Check the response against the contract, if one applies.
+//! 8. Persist variable changes to the workspace's local state.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -839,6 +840,12 @@ async fn execute(
             }),
         }
     }
+
+    // 7. Contract checks, reported as one more test.
+    if let Some(contract) = crate::contract::effective(request, ancestors) {
+        let test = crate::contract::check(ws.root(), contract, &result.request, &response);
+        result.tests.push(test);
+    }
     result.response = Some(response);
     result
 }
@@ -1286,5 +1293,63 @@ mod tests {
         CookieJar::of(&ws).clear(None).unwrap();
         let r = run_draft(&ws, &me, None, &o).await.unwrap();
         assert_eq!(r.response.as_ref().map(|r| r.status), Some(401));
+    }
+
+    #[tokio::test]
+    async fn contract_checks_run_after_scripts() {
+        let (dir, ws, server, mut meta, env) = setup().await;
+        Mock::given(method("GET"))
+            .and(path("/users/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 1})))
+            .mount(&server)
+            .await;
+        std::fs::write(
+            dir.path().join("api.yaml"),
+            r#"
+openapi: 3.0.3
+paths:
+  /users/{id}:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { type: object, required: [id, name] }
+"#,
+        )
+        .unwrap();
+        meta.contract = Some(Contract {
+            openapi: "api.yaml".into(),
+            ..Default::default()
+        });
+        ws.update_group(&meta).unwrap();
+        let mut req = Request::new("Get user", "GET", "{{baseUrl}}/users/1");
+        req.scripts.post_response =
+            "trax.test('status', () => trax.expect(trax.response.status).toBe(200));".into();
+        let req = ws.create_request(&meta.id, req).unwrap();
+
+        let r = run_saved(&ws, &req.id, &opts(&env)).await.unwrap();
+        assert_eq!(r.tests.len(), 2);
+        assert!(r.tests[0].passed);
+        let contract = &r.tests[1];
+        assert_eq!(contract.name, "contract: GET /users/{id}");
+        assert_eq!(contract.source, "contract");
+        assert_eq!(
+            contract.error.as_deref(),
+            Some("\"name\" is a required property")
+        );
+        assert!(!r.ok());
+
+        // A request can opt out of the collection's contract.
+        let mut req = ws.request(&req.id).unwrap();
+        req.contract = Some(Contract {
+            off: true,
+            ..Default::default()
+        });
+        ws.save_request(&req).unwrap();
+        let r = run_saved(&ws, &req.id, &opts(&env)).await.unwrap();
+        assert_eq!(r.tests.len(), 1);
+        assert!(r.ok());
     }
 }

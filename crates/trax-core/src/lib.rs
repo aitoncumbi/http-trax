@@ -7,6 +7,7 @@
 
 pub mod agents;
 pub mod auth;
+pub mod contract;
 pub mod cookies;
 pub mod diff;
 pub mod error;

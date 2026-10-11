@@ -536,6 +536,75 @@ paths:
 }
 
 #[tokio::test]
+async fn agent_sets_a_contract() {
+    let api = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pets"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "name": 7 }])))
+        .mount(&api)
+        .await;
+    let h = Harness::new();
+    // The spec sits next to the workspace, as in a service repository.
+    std::fs::write(
+        h.repo.path().join("openapi.yaml"),
+        r#"
+openapi: 3.0.3
+paths:
+  /pets:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, properties: { name: { type: string } } }
+"#,
+    )
+    .unwrap();
+    h.tool(
+        "init_workspace",
+        json!({ "path": h.repo.path().join("api-tests").to_string_lossy() }),
+    )
+    .await;
+
+    let (text, _, err) = h
+        .tool(
+            "upsert_collection",
+            json!({ "name": "Pets", "variables": { "baseUrl": api.uri() }, "contract": "openapi.yaml" }),
+        )
+        .await;
+    assert!(err && text.contains("invalid contract"), "{text}");
+    let (text, _, err) = h
+        .tool(
+            "upsert_collection",
+            json!({ "name": "Pets", "variables": { "baseUrl": api.uri() }, "contract": { "openapi": "../openapi.yaml" } }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    let request = json!({ "collection": "Pets", "name": "List pets", "url": "{{baseUrl}}/pets" });
+    h.tool("upsert_request", request.clone()).await;
+
+    let (text, report, err) = h
+        .tool("run_collection", json!({ "collection": "Pets" }))
+        .await;
+    assert!(err, "{text}");
+    assert_eq!(report["testsFailed"], 1);
+    assert!(text.contains("contract: GET /pets"), "{text}");
+    assert!(text.contains("/0/name"), "{text}");
+
+    // A request can opt out.
+    let mut off = request.clone();
+    off["contract"] = json!({ "off": true });
+    h.tool("upsert_request", off).await;
+    let (text, _, err) = h
+        .tool("run_collection", json!({ "collection": "Pets" }))
+        .await;
+    assert!(!err, "{text}");
+}
+
+#[tokio::test]
 async fn agent_uses_templates_prs_and_review_comments() {
     let h = Harness::new();
     let (_, tpl_data, err) = h.tool("list_workspace_templates", json!({})).await;

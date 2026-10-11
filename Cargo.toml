@@ -37,6 +37,8 @@ boa_engine = { version = "0.22", default-features = false, features = ["annex-b"
 cookie_store = { version = "0.22", default-features = false, features = ["serde_json"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 dirs = "6"
+# Contract checks only: no HTTP or file retrieval of remote `$ref`s.
+jsonschema = { version = "0.58", default-features = false }
 notify = "8"
 reqwest = { version = "0.13", features = ["gzip", "brotli", "deflate", "multipart", "form", "cookies"] }
 serde = { version = "1", features = ["derive"] }

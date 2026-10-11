@@ -192,6 +192,34 @@ impl Changes {
         }
     }
 
+    fn contract(&mut self, before: &Option<Contract>, after: &Option<Contract>) {
+        if before == after {
+            return;
+        }
+        let kind = match (before, after) {
+            (None, Some(_)) => ChangeKind::Added,
+            (Some(_), None) => ChangeKind::Removed,
+            _ => ChangeKind::Updated,
+        };
+        let label = match kind {
+            ChangeKind::Added => "Contract added",
+            ChangeKind::Removed => "Contract removed",
+            _ => "Contract changed",
+        };
+        self.push(
+            kind,
+            label,
+            after
+                .as_ref()
+                .or(before.as_ref())
+                .map(describe_contract)
+                .unwrap_or_default(),
+            "Contract",
+            before.as_ref().map(describe_contract),
+            after.as_ref().map(describe_contract),
+        );
+    }
+
     fn scripts(&mut self, before: &Scripts, after: &Scripts) {
         self.field(
             "Pre-request script updated",
@@ -463,6 +491,18 @@ fn body_text(b: &Body) -> String {
     }
 }
 
+fn describe_contract(c: &Contract) -> String {
+    if c.off {
+        "off".into()
+    } else if !c.schema.is_empty() {
+        format!("JSON Schema {}", c.schema)
+    } else if !c.openapi.is_empty() {
+        format!("OpenAPI {}", c.openapi)
+    } else {
+        "none".into()
+    }
+}
+
 fn auth_name(a: &Auth) -> String {
     match a {
         Auth::Inherit => "inherit",
@@ -605,6 +645,7 @@ fn diff_request(before: Option<Request>, after: Option<Request>) -> Vec<Semantic
                     Some(format!("{:?}", a.settings)),
                 );
             }
+            c.contract(&b.contract, &a.contract);
             c.field(
                 "Docs updated",
                 "description",
@@ -669,6 +710,7 @@ fn diff_group(
             c.key_values("Header", "Headers", &kv(&b.headers), &kv(&a.headers));
             c.auth(&b.auth, &a.auth);
             c.scripts(&b.scripts, &a.scripts);
+            c.contract(&b.contract, &a.contract);
         }
         (None, None) => {}
     }
@@ -918,5 +960,28 @@ mod tests {
     fn unknown_or_broken_files_fall_back() {
         assert!(semantic_diff("README.md", None, Some("hi")).is_none());
         assert!(semantic_diff("x.req.yaml", Some("<<<<<<< HEAD\n"), Some("id: 1")).is_none());
+    }
+
+    #[test]
+    fn describes_contract_changes() {
+        let before = Request::new("Get user", "GET", "/users/1");
+        let mut after = before.clone();
+        after.contract = Some(Contract {
+            schema: "schemas/user.json".into(),
+            ..Default::default()
+        });
+        let yaml = |r: &Request| serde_yaml_ng::to_string(r).unwrap();
+        let changes = semantic_diff(
+            "get-user.req.yaml",
+            Some(&yaml(&before)),
+            Some(&yaml(&after)),
+        )
+        .unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].label, "Contract added");
+        assert_eq!(
+            changes[0].after.as_deref(),
+            Some("JSON Schema schemas/user.json")
+        );
     }
 }
