@@ -105,7 +105,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 
 ## Phase 3 — Automation and AI
 
-- [ ] `trax` CLI: run collections in CI with JUnit, JSON and Markdown reports and a non-zero exit on failures
+- [x] `trax` CLI (`courion-cli`): run collections in CI with JUnit, JSON and Markdown reports and a non-zero exit on failures; secrets from the environment, masked in output
 - [ ] MCP over Streamable HTTP served by the running app, so agents can drive the live UI (open a request, show a result)
 - [ ] MCP resources (collections, requests, environments) and prompts ("write tests for this endpoint")
 - [ ] `import_openapi` MCP tool and "generate requests and tests from an OpenAPI spec"

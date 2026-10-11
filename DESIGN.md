@@ -41,10 +41,11 @@ This document records the design decisions behind http-trax and the reasons for 
 | `crates/trax-script` | The JavaScript sandbox for scripts: `trax`/`pm` API, `expect`, tests, limits. |
 | `crates/trax-git` | Git operations through the `git` CLI, output parsers, review/compare, the one-shot sync pass. |
 | `crates/trax-mcp` | MCP server (library + `trax-mcp` binary). |
+| `crates/trax-cli` | Command-line runner for CI (library + `trax` binary): selection, console output, JUnit/JSON/Markdown reports. |
 | `src-tauri` | Desktop shell: Tauri commands over the crates above, background sync worker, file watcher. |
 | `src/` | Next.js UI. `src/lib/api.ts` is the only place that talks to the backend. |
 
-The desktop app and the MCP server are deliberately thin layers over `trax-core`. That is what guarantees parity: a request run from the UI and the same request run by an agent go through the same code.
+The desktop app, the MCP server and the CLI are deliberately thin layers over `trax-core`. That is what guarantees parity: a request run from the UI and the same request run by an agent go through the same code.
 
 ### Why Tauri + Rust + a static Next.js export
 
@@ -160,7 +161,7 @@ Each workspace has a cookie jar (`trax_core::cookies`), so a login request that 
 
 Scripts run in [Boa](https://boajs.dev), a JavaScript engine written in Rust.
 
-- **Why in Rust rather than in the webview?** The MCP server and (later) a CLI runner must run the same scripts with no webview. One engine guarantees identical behaviour everywhere.
+- **Why in Rust rather than in the webview?** The MCP server and the CLI must run the same scripts with no webview. One engine guarantees identical behaviour everywhere.
 - **Why Boa rather than QuickJS or V8?** Boa is pure Rust: no C toolchain quirks on Windows, no large native dependency, and it builds anywhere `cargo` does. Script workloads (assertions, small transforms) are tiny, so raw engine speed doesn't matter here. The boundary is engine-agnostic, so this can be revisited.
 - **JSON in, JSON out.** The host serialises the request, response and variables to JSON. A JavaScript prelude (`crates/trax-script/src/prelude.js`) builds the `trax` API on top of it, runs the user script as an `AsyncFunction` (so top-level `await` works and syntax errors are caught), and returns the new state as JSON. There are no native callbacks into Rust, so the sandbox has no file, network or process access at all.
 - **Limits.** Loop iteration and recursion limits stop runaway scripts. Uncaught errors are reported along with any tests and logs recorded before them.
@@ -216,6 +217,20 @@ Decisions:
 - **Protected environments** are never used by agents: a run whose environment is protected fails with a message telling the agent to pick another environment or ask the user.
 - **Who is connected, and what they did.** Each `trax-mcp` process writes `agents/<pid>.json` in the registry directory after `initialize` (client name from `clientInfo`) and refreshes it every 30 seconds; the app treats sessions seen in the last 90 seconds as connected and also checks the clients' config files to show "Set up". Creating, editing, deleting and running are appended to `.trax/agent-activity.json` in the workspace (local, last 200 entries), which the agents view lists.
 
+## CLI
+
+`trax` (`courion-cli`) runs collections outside the app, mainly in CI: `trax run [WORKSPACE] [-c Collection/Folder]... [-e Environment]`, plus `trax list` to discover names.
+
+Decisions:
+
+- **Same runner.** Each selected collection or folder goes through `run_group_with_progress`, the app's collection runner with a callback per finished request, so lines stream to the CI log instead of appearing when the collection ends. Variables flow between requests of a collection as in the app; each collection starts fresh.
+- **Exit codes CI can rely on:** `0` all passed, `1` something failed (a test, a script error, no response), `2` nothing could run (usage, missing workspace, unknown collection, folder or environment, a protected environment without `--allow-protected`, unreadable workspace files, a report that can't be written). A requested environment that doesn't exist is an error rather than the app's "run without it" fallback, because a typo in a pipeline should fail loudly. Files that don't parse (an unresolved merge conflict, say) stop the run for the same reason: those requests would otherwise be skipped silently.
+- **Workspace resolution:** a folder with `trax.yaml` (default: the current directory), else a workspace registered in the app by name or id. No environment is selected unless `-e` is passed: the app's selection is a per-machine preference, and pipelines should say what they run against.
+- **Secrets from the pipeline.** Secret values are never committed, so in CI an environment's secret variables are empty. `--secret key=ENV` reads a value from the process environment; the CLI warns about each secret variable of the selected environment that has no value. Every secret value (from `--secret`, or a secret variable the environment resolved, vault references included) is masked in the console and in all reports. Values shorter than four characters aren't masked, as they'd mangle unrelated text.
+- **Stateless by default.** Runs don't write variable changes or history to `.trax/` unless `--persist` is passed, so a pipeline (or a local check) doesn't leave state that changes the next run. Cookies and OAuth 2.0 tokens are still cached as in the app.
+- **Reports.** JUnit: one `<testsuite>` per request ("Collection / Folder / Request"), one `<testcase>` per test; a request without tests gets a "response received" case, transport and script errors are `<error>`s, failed assertions `<failure>`s. JSON: every request with status, timing, tests, script errors and console output. Markdown: a summary table and the failures, sized for `$GITHUB_STEP_SUMMARY`. Response headers and bodies are left out of all three, since reports become build artifacts.
+- **Hand-rolled arguments**, like `trax-mcp`: a handful of flags doesn't justify `clap`'s compile time and binary size.
+
 ## UI
 
 The interface follows the "Courion" design (dark first, quiet chrome, one indigo accent, Inter). Only the UI carries that name for now: the window title, logo and wordmark. Binaries, installers, the MCP server and the `trax.*` script API keep the http-trax name.
@@ -253,9 +268,9 @@ The interface follows the "Courion" design (dark first, quiet chrome, one indigo
 
 ## Testing and CI
 
-- Rust unit and integration tests: the script sandbox, workspace storage, the runner against a local mock HTTP server (`wiremock`), git operations against real temporary repositories (two clones of a bare remote simulate teammates, including conflicts and auto-pull), and an end-to-end MCP session in which an "agent" builds and runs a suite.
+- Rust unit and integration tests: the script sandbox, workspace storage, the runner against a local mock HTTP server (`wiremock`), git operations against real temporary repositories (two clones of a bare remote simulate teammates, including conflicts and auto-pull), an end-to-end MCP session in which an "agent" builds and runs a suite, and CLI runs (reports, masking, `--bail`, setup errors, and the binary's exit codes) against a mock server.
 - Frontend: ESLint (Next.js core-web-vitals + TypeScript rules, React Compiler checks), `tsc --noEmit`, and a production build.
-- GitHub Actions: `ci.yml` runs frontend checks, Rust fmt/clippy/tests on Linux and Windows, then builds the desktop app and installers on both (Linux: .deb, .rpm, AppImage; Windows: .msi and NSIS setup) and uploads them with standalone `trax-mcp` binaries. `release.yml` builds the same on a `v*` tag and publishes everything on that tag's GitHub release (a pre-release when the tag has a suffix such as `-beta.1`).
+- GitHub Actions: `ci.yml` runs frontend checks, Rust fmt/clippy/tests on Linux and Windows, then builds the desktop app and installers on both (Linux: .deb, .rpm, AppImage; Windows: .msi and NSIS setup) and uploads them with standalone `trax-mcp` and `trax` binaries. `release.yml` builds the same on a `v*` tag and publishes everything on that tag's GitHub release (a pre-release when the tag has a suffix such as `-beta.1`).
 
 ## Known trade-offs
 

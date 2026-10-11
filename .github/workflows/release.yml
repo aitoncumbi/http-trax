@@ -21,10 +21,14 @@ jobs:
             os: ubuntu-22.04
             mcp: trax-mcp
             mcp_asset: trax-mcp-x86_64-unknown-linux-gnu
+            cli: trax
+            cli_asset: trax-x86_64-unknown-linux-gnu
           - name: Windows
             os: windows-latest
             mcp: trax-mcp.exe
             mcp_asset: trax-mcp-x86_64-pc-windows-msvc.exe
+            cli: trax.exe
+            cli_asset: trax-x86_64-pc-windows-msvc.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -54,7 +58,8 @@ jobs:
           releaseName: http-trax ${{ github.ref_name }}
           releaseBody: |
             Installers for Linux (.deb, .rpm, .AppImage) and Windows (.msi, setup .exe).
-            The `trax-mcp` MCP server ships inside each installer; standalone binaries are attached too.
+            The `trax-mcp` MCP server ships inside each installer; standalone binaries are attached too,
+            along with the `trax` CLI for running collections in CI.
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
@@ -65,3 +70,12 @@ jobs:
         run: |
           cp "target/release/${{ matrix.mcp }}" "${{ matrix.mcp_asset }}"
           gh release upload "${{ github.ref_name }}" "${{ matrix.mcp_asset }}" --clobber
+
+      - name: Attach CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo build --release -p trax-cli
+          cp "target/release/${{ matrix.cli }}" "${{ matrix.cli_asset }}"
+          gh release upload "${{ github.ref_name }}" "${{ matrix.cli_asset }}" --clobber

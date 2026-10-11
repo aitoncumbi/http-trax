@@ -120,3 +120,15 @@ jobs:
           path: |
             target/release/trax-mcp
             target/release/trax-mcp.exe
+
+      - name: Build CLI
+        run: cargo build --release -p trax-cli
+
+      - name: Upload CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: trax-cli-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            target/release/trax
+            target/release/trax.exe

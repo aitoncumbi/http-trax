@@ -4,7 +4,7 @@ A desktop API client in the spirit of Postman, built around git. Your collection
 
 Built with Rust and Tauri 2 (backend and desktop shell) and Next.js (UI). Runs on Linux and Windows.
 
-The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, plus `http-trax` / `trax-mcp` aliases), MCP server (`courion`), and script API (`courion.*` and `trax.*`) all support the **Courion** name while preserving full backwards compatibility with `http-trax` / `trax`.
+The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, `courion-cli`, plus `http-trax` / `trax-mcp` / `trax` aliases), MCP server (`courion`), and script API (`courion.*` and `trax.*`) all support the **Courion** name while preserving full backwards compatibility with `http-trax` / `trax`.
 
 ![Request editor](docs/screenshots/request.png)
 
@@ -25,6 +25,7 @@ The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, plus `http-
 - **Everyday tools.** `{{variable}}` autocomplete with the resolved value on hover; copy any request as cURL or as fetch, axios, Python, Go or Rust code; search, filter (JSONPath & JMESPath), wrap, save responses, and virtualized rendering for multi-megabyte responses; plus a per-workspace cookie jar with a cookie manager.
 - **Environments done right for git.** Shared values are committed; values your scripts set (like fresh tokens) stay on your machine, and secrets go to the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service). A secret can also be a vault reference the whole team shares (`op://` 1Password, `vault://` HashiCorp Vault, `azkv://` Azure Key Vault), read when the request is sent. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
 - **MCP server for AI agents.** `courion-mcp` (`trax-mcp`) ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
+- **Runs in CI.** The `trax` CLI runs collections in a pipeline with the same runner as the app, exits non-zero when a test fails, and writes JUnit, JSON and Markdown reports. Secrets come from the pipeline's environment and are masked in the output.
 - **Import from anywhere.** Import OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments with example responses, HAR archives, Insomnia exports, and Bruno collections; `pm.*` scripts keep working.
 
 ![Source control](docs/screenshots/source-control.png)
@@ -33,7 +34,7 @@ The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, plus `http-
 
 ## Install
 
-Download the latest installers from the [releases page](https://github.com/aitoncumbi/http-trax/releases): `.deb`, `.rpm` and `.AppImage` for Linux, `.msi` and a setup `.exe` for Windows, plus standalone `courion-mcp` / `trax-mcp` binaries. Pushing a version tag (`v0.2.0`) builds and publishes a new release automatically; the installers appear on it about 20 minutes later, once the builds finish. Every CI run also uploads the installers as build artifacts.
+Download the latest installers from the [releases page](https://github.com/aitoncumbi/http-trax/releases): `.deb`, `.rpm` and `.AppImage` for Linux, `.msi` and a setup `.exe` for Windows, plus standalone `trax-mcp` (MCP server) and `trax` (CLI) binaries. Pushing a version tag (`v0.2.0`) builds and publishes a new release automatically; the installers appear on it about 20 minutes later, once the builds finish. Every CI run also uploads the installers as build artifacts.
 
 Courion uses your installed `git` for all repository operations, so your existing credentials (SSH keys, Git Credential Manager, `gh auth`) just work.
 
@@ -73,6 +74,33 @@ Leave out `--workspace` to use whichever workspace is active in the app. The age
 | `list_review_comments`, `add_review_comment`, `resolve_review_comment` | Review comments pinned to a request field |
 | `semantic_merge_file` | Field-level merge preview (and resolution) of a conflicted request, environment or collection |
 | `get_workspace`, `get_request`, `list_environments`, `list_workspaces`, `list_saved_responses`, `delete_request`, `list_cookies`, `clear_cookies` | Read and tidy up |
+
+## Run collections in CI
+
+`trax` (also installed as `courion-cli`) runs collections from a terminal or a pipeline, using the same runner, scripts and auth as the app:
+
+```sh
+trax list ./api-tests                                   # collections, folders, environments
+trax run ./api-tests -e Local                           # every collection
+trax run ./api-tests -e Local -c Users -c "Orders/Admin" --bail
+```
+
+It exits with `0` when every request passed, `1` when a test, a script or a request failed, and `2` for setup errors (no workspace, unknown collection or environment). Secrets aren't committed, so pass them from the pipeline: `--secret apiKey=API_KEY` sets the `apiKey` variable from the `API_KEY` environment variable and masks its value everywhere in the output. Plain values go in with `--var baseUrl=http://localhost:8080`. Protected environments need `--allow-protected`. Variables set by scripts aren't kept, and runs aren't added to history, unless you pass `--persist`.
+
+GitHub Actions, with a JUnit report and a summary on the run page:
+
+```yaml
+- name: API tests
+  env:
+    API_KEY: ${{ secrets.API_KEY }}
+  run: |
+    curl -sSL -o trax https://github.com/aitoncumbi/http-trax/releases/latest/download/trax-x86_64-unknown-linux-gnu
+    chmod +x trax
+    ./trax run api-tests -e CI --secret apiKey=API_KEY \
+      --junit trax-report.xml --markdown "$GITHUB_STEP_SUMMARY"
+```
+
+`--json report.json` writes every request with its status, tests, script errors and console output. Reports leave out response headers and bodies, since they usually end up as build artifacts.
 
 ## Scripting in 30 seconds
 
@@ -147,7 +175,7 @@ npm run app:dev        # desktop app with hot reload (builds trax-mcp first)
 npm run dev            # UI only, in the browser, against a mock backend
 npm run app:build      # release build + installers in target/release/bundle
 
-cargo test             # Rust tests (core, scripting, git, MCP)
+cargo test             # Rust tests (core, scripting, git, MCP, CLI)
 npm run lint && npm run typecheck
 ```
 
@@ -159,10 +187,11 @@ Project layout:
 | `crates/trax-script` | JavaScript sandbox for scripts |
 | `crates/trax-git` | Git integration and the background sync pass |
 | `crates/trax-mcp` | MCP server (`trax-mcp` binary) |
+| `crates/trax-cli` | Command-line runner for CI (`trax` binary) |
 | `src-tauri` | Tauri app: commands, sync worker, file watcher |
 | `src` | Next.js UI |
 | `scripts/build-sidecar.mjs` | Builds `trax-mcp` for bundling with the app |
 
 ## Roadmap
 
-A CLI runner for CI, MCP over HTTP to drive the live app, contract checks, mock servers and monitors, then more protocols (WebSocket, SSE, gRPC) and auto-updates. See [ROADMAP.md](ROADMAP.md).
+MCP over HTTP to drive the live app, contract checks, mock servers and monitors, then more protocols (WebSocket, SSE, gRPC) and auto-updates. See [ROADMAP.md](ROADMAP.md).

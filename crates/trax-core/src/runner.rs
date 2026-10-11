@@ -953,6 +953,18 @@ pub async fn run_group(
     opts: &RunOptions,
     stop_on_failure: bool,
 ) -> Result<(CollectionRunReport, Vec<RunResult>)> {
+    run_group_with_progress(ws, group_id, opts, stop_on_failure, |_, _| {}).await
+}
+
+/// [`run_group`], calling `on_result` as each request finishes (live output
+/// for the CLI).
+pub async fn run_group_with_progress(
+    ws: &Workspace,
+    group_id: &str,
+    opts: &RunOptions,
+    stop_on_failure: bool,
+    mut on_result: impl FnMut(&CollectionRunItem, &RunResult),
+) -> Result<(CollectionRunReport, Vec<RunResult>)> {
     let started = Instant::now();
     let tree = ws.tree()?;
     let group = tree
@@ -967,8 +979,9 @@ pub async fn run_group(
     for summary in group.requests() {
         let ctx = ws.request_context(&summary.id)?;
         let result = execute(ws, &mut session, &ctx.request, &ctx.ancestors).await;
-        let ok = result.ok() && !result.skipped;
-        items.push(CollectionRunItem {
+        // A request skipped by its pre-request script counts as passed.
+        let ok = result.ok() || result.skipped;
+        let item = CollectionRunItem {
             request_id: summary.id.clone(),
             name: summary.name.clone(),
             method: ctx.request.method.clone(),
@@ -981,8 +994,10 @@ pub async fn run_group(
                 .error
                 .clone()
                 .or_else(|| result.script_errors.first().map(|e| e.message.clone())),
-            ok: ok || result.skipped,
-        });
+            ok,
+        };
+        on_result(&item, &result);
+        items.push(item);
         results.push(result);
         if stop_on_failure && !ok {
             break;
