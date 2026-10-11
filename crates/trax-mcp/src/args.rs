@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
-use trax_core::{Body, KeyValue, Variable};
+use trax_core::{Body, Contract, KeyValue, Variable};
 
 pub fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)
@@ -151,6 +151,27 @@ pub fn body(v: &Value) -> Result<Body, String> {
 
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
+}
+
+/// A contract: `{"openapi": path}`, `{"schema": path}`, `{"off": true}`,
+/// `false` (off), or `null` (none, so it inherits).
+pub fn contract(v: &Value) -> Result<Option<Contract>, String> {
+    match v {
+        Value::Null => Ok(None),
+        Value::Bool(false) => Ok(Some(Contract {
+            off: true,
+            ..Default::default()
+        })),
+        Value::Object(_) => serde_json::from_value(v.clone())
+            .map(|c: Contract| {
+                (c.off || !c.openapi.is_empty() || !c.schema.is_empty()).then_some(c)
+            })
+            .map_err(|e| format!("invalid contract: {e}")),
+        _ => Err(
+            "invalid contract: expected {\"openapi\": path}, {\"schema\": path}, {\"off\": true} or null"
+                .into(),
+        ),
+    }
 }
 
 /// Accept snake_case aliases inside `scripts`.

@@ -9,10 +9,11 @@ import { newRequest } from "@/lib/util";
 import { AuthEditor } from "../editors/AuthEditor";
 import { KeyValueEditor, makeKv, makeVar } from "../editors/KeyValueEditor";
 import { ScriptsEditor } from "../editors/ScriptsEditor";
+import { Switch } from "../ui/Controls";
 import { TabStrip } from "../ui/Segmented";
 import { PageHeader, SaveButton } from "./PageHeader";
 
-type Section = "overview" | "variables" | "headers" | "auth" | "scripts";
+type Section = "overview" | "variables" | "headers" | "auth" | "scripts" | "contract";
 
 /** Settings shared by every request in a collection or folder. */
 export function GroupEditor({ tab }: { tab: GroupTab }) {
@@ -28,7 +29,9 @@ export function GroupEditor({ tab }: { tab: GroupTab }) {
     { id: "headers", label: "Headers", badge: g.headers?.length || undefined },
     { id: "auth", label: "Auth", badge: g.auth && g.auth.type !== "inherit" ? g.auth.type : undefined },
     { id: "scripts", label: "Scripts", badge: g.scripts?.preRequest?.trim() || g.scripts?.postResponse?.trim() ? "•" : undefined },
+    { id: "contract", label: "Contract", badge: g.contract?.off ? "off" : g.contract?.openapi ? "•" : undefined },
   ];
+  const noun = tab.isCollection ? "collection" : "folder";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -75,6 +78,35 @@ export function GroupEditor({ tab }: { tab: GroupTab }) {
             allowInherit={!tab.isCollection}
             oauthTarget={{ request: { ...newRequest(), id: "", auth: g.auth ?? { type: "inherit" } }, parentId: tab.groupId }}
           />
+        )}
+        {section === "contract" && (
+          <div className="max-w-[720px] px-5 py-4">
+            <label htmlFor="group-openapi" className="label">
+              OpenAPI document
+            </label>
+            <input
+              id="group-openapi"
+              className="input h-9 font-mono text-[13px]"
+              placeholder="../openapi.yaml"
+              disabled={g.contract?.off}
+              value={g.contract?.openapi ?? ""}
+              onChange={(e) => set({ contract: e.target.value ? { openapi: e.target.value } : undefined })}
+            />
+            <p className="mt-3 text-[12.5px] leading-[19px] text-faint">
+              Every response in this {noun} is checked against the operation for its method and path: the status, content type and required
+              headers must be documented, and the body must match the schema. The result shows up as a &ldquo;contract&rdquo; test. OpenAPI 3.x
+              and Swagger 2.0, YAML or JSON. The path is relative to the workspace folder, so the spec can stay next to the service&rsquo;s code.
+            </p>
+            {!tab.isCollection && (
+              <div className="mt-4 flex min-h-[62px] items-center gap-3.5 border-t border-border-soft">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14.5px]">Turn off for this folder</div>
+                  <div className="mt-0.5 text-[12.5px] text-faint">Skip the collection&rsquo;s contract for every request in this folder.</div>
+                </div>
+                <Switch checked={!!g.contract?.off} onChange={(v) => set({ contract: v ? { off: true } : undefined })} label="Turn off for this folder" />
+              </div>
+            )}
+          </div>
         )}
         {section === "scripts" && (
           <ScriptsEditor

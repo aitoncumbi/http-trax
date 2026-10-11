@@ -404,6 +404,25 @@ impl RequestSettings {
     }
 }
 
+/// What responses must look like: an OpenAPI document or a JSON Schema.
+/// The nearest setting applies (request, then folders, then collection), so
+/// a folder can point at another spec and a request can opt out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Contract {
+    /// OpenAPI 3.x or Swagger 2.0 document (YAML or JSON), relative to the
+    /// workspace root (it may sit outside it, e.g. `../openapi.yaml`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub openapi: String,
+    /// JSON Schema file the response body must match, relative to the
+    /// workspace root. Takes the place of the OpenAPI check where it is set.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub schema: String,
+    /// No contract checks here, whatever folders or the collection set.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub off: bool,
+}
+
 /// A saved request (`*.req.yaml`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -428,6 +447,9 @@ pub struct Request {
     pub scripts: Scripts,
     #[serde(default, skip_serializing_if = "RequestSettings::is_default")]
     pub settings: RequestSettings,
+    /// Overrides the contract inherited from folders and the collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
 }
 
 impl Request {
@@ -445,6 +467,7 @@ impl Request {
             auth: Auth::Inherit,
             scripts: Scripts::default(),
             settings: RequestSettings::default(),
+            contract: None,
         }
     }
 }
@@ -469,6 +492,10 @@ pub struct GroupMeta {
     pub auth: Auth,
     #[serde(default, skip_serializing_if = "Scripts::is_empty")]
     pub scripts: Scripts,
+    /// Check every response below this collection or folder against a
+    /// contract (`trax_core::contract`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
 }
 
 impl GroupMeta {
@@ -482,6 +509,7 @@ impl GroupMeta {
             headers: Vec::new(),
             auth: Auth::Inherit,
             scripts: Scripts::default(),
+            contract: None,
         }
     }
 }

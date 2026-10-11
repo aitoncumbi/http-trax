@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Code2, Cookie, Copy, Loader2,
 import { useMemo, useRef, useState } from "react";
 
 import { tabDirty, useStore, type PaneLayout, type RequestTab } from "@/lib/store";
-import type { Auth, Body, GroupNode, KeyValue, Request } from "@/lib/types";
+import type { Auth, Body, Contract, GroupNode, KeyValue, Request } from "@/lib/types";
 import { hostOf } from "@/lib/cookies";
 import { cx, findChain, METHODS, methodColor } from "@/lib/util";
 import { resolveText } from "@/lib/variables";
@@ -69,6 +69,24 @@ function inheritedAuth(chain: GroupNode[]): { from: string; auth: Auth } | null 
     if (a && a.type !== "inherit") return { from: chain[i].meta.name, auth: a };
   }
   return null;
+}
+
+function inheritedContract(chain: GroupNode[]): { from: string; contract: Contract } | null {
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const c = chain[i].meta.contract;
+    if (c && (c.off || c.openapi || c.schema)) return { from: chain[i].meta.name, contract: c };
+  }
+  return null;
+}
+
+/** Which contract applies to the request, in a sentence. */
+function contractNote(own: Contract | undefined, inherited: { from: string; contract: Contract } | null): string {
+  if (own?.off) return "Off for this request.";
+  if (own?.schema) return `The body must match ${own.schema}.`;
+  if (!inherited) return "No OpenAPI document is set on the collection or its folders.";
+  const c = inherited.contract;
+  if (c.off) return `Turned off in ${inherited.from}.`;
+  return `Checked against ${c.openapi || c.schema}, set on ${inherited.from}.`;
 }
 
 function LayoutToggle() {
@@ -330,6 +348,34 @@ export function RequestView({ tab }: { tab: RequestTab }) {
                     className="input h-8 w-28 text-right font-mono text-[13px]"
                   />
                 </div>
+                <div className="flex min-h-[62px] items-center gap-3.5 border-b border-border-soft">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[14.5px]">Check the contract</div>
+                    <div className="mt-0.5 text-[12.5px] text-faint">{contractNote(r.contract, inheritedContract(chain))}</div>
+                  </div>
+                  <Switch
+                    checked={!r.contract?.off}
+                    onChange={(v) => set({ contract: v ? (r.contract?.schema ? { schema: r.contract.schema } : undefined) : { off: true } })}
+                    label="Check the contract"
+                  />
+                </div>
+                {!r.contract?.off && (
+                  <div className="flex min-h-[62px] items-center gap-3.5 border-b border-border-soft">
+                    <div className="min-w-0 flex-1">
+                      <label htmlFor="req-schema" className="text-[14.5px]">
+                        JSON Schema
+                      </label>
+                      <div className="mt-0.5 text-[12.5px] text-faint">Check the body against this file instead. Relative to the workspace folder.</div>
+                    </div>
+                    <input
+                      id="req-schema"
+                      placeholder="schemas/user.json"
+                      value={r.contract?.schema ?? ""}
+                      onChange={(e) => set({ contract: e.target.value ? { schema: e.target.value } : undefined })}
+                      className="input h-8 w-56 font-mono text-[13px]"
+                    />
+                  </div>
+                )}
                 <div className="flex flex-col gap-3.5 py-4">
                   <div className="flex flex-col gap-1.5">
                     <label htmlFor="req-proxy" className="text-[14px]">

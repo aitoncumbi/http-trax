@@ -119,6 +119,19 @@ export interface RequestSettings {
   clientKey?: string;
 }
 
+/**
+ * What responses must look like. The nearest setting applies: request, then
+ * folders, then the collection. Paths are relative to the workspace root.
+ */
+export interface Contract {
+  /** OpenAPI 3.x or Swagger 2.0 document (YAML or JSON). */
+  openapi?: string;
+  /** JSON Schema the response body must match. */
+  schema?: string;
+  /** No checks here, whatever folders or the collection set. */
+  off?: boolean;
+}
+
 /** A cookie in the workspace jar (`.trax/cookies.json`, never committed). */
 export interface CookieInfo {
   name: string;
@@ -154,6 +167,7 @@ export interface Request {
   auth?: Auth;
   scripts?: Scripts;
   settings?: RequestSettings;
+  contract?: Contract;
 }
 
 export interface GroupMeta {
@@ -165,6 +179,7 @@ export interface GroupMeta {
   headers?: KeyValue[];
   auth?: Auth;
   scripts?: Scripts;
+  contract?: Contract;
 }
 
 export interface Environment {

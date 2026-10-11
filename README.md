@@ -25,6 +25,7 @@ The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, `courion-cl
 - **Everyday tools.** `{{variable}}` autocomplete with the resolved value on hover; copy any request as cURL or as fetch, axios, Python, Go or Rust code; search, filter (JSONPath & JMESPath), wrap, save responses, and virtualized rendering for multi-megabyte responses; plus a per-workspace cookie jar with a cookie manager.
 - **Environments done right for git.** Shared values are committed; values your scripts set (like fresh tokens) stay on your machine, and secrets go to the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service). A secret can also be a vault reference the whole team shares (`op://` 1Password, `vault://` HashiCorp Vault, `azkv://` Azure Key Vault), read when the request is sent. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
 - **MCP server for AI agents.** `courion-mcp` (`trax-mcp`) ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
+- **Contract checks.** Point a collection at your OpenAPI document (3.x or Swagger 2.0) and every response is checked against it: the path, method, status, content type and required headers must be documented, and the body must match the schema. A request can use a JSON Schema file instead, or opt out. Violations show up as a failing "contract" test in the app, for agents and in CI.
 - **Runs in CI.** The `trax` CLI runs collections in a pipeline with the same runner as the app, exits non-zero when a test fails, and writes JUnit, JSON and Markdown reports. Secrets come from the pipeline's environment and are masked in the output.
 - **Import from anywhere.** Import OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments with example responses, HAR archives, Insomnia exports, and Bruno collections; `pm.*` scripts keep working.
 
@@ -129,7 +130,7 @@ Postman-style scripts work for the common cases: `pm.test`, `pm.expect(x).to.equ
 api-tests/
   trax.yaml                         # workspace name, team, variables
   collections/orders-api/
-    collection.yaml                 # shared headers, auth, variables, scripts
+    collection.yaml                 # shared headers, auth, variables, scripts, contract
     create-order.req.yaml           # one request per file
     admin/folder.yaml
     admin/refund-order.req.yaml
@@ -157,6 +158,18 @@ scripts:
       trax.expect(trax.response.status).toBe(201);
     });
 ```
+
+To check responses against an OpenAPI document, add it to the collection (or a folder). The path is relative to the workspace, so the spec can stay where the service keeps it:
+
+```yaml
+# collections/orders-api/collection.yaml
+id: 0c9a6a1e-58b5-4c1f-9d64-0b8e0a1f3c2d
+name: Orders API
+contract:
+  openapi: ../openapi.yaml
+```
+
+A request can override it with `contract: { schema: schemas/order.json }` or turn it off with `contract: { off: true }`.
 
 See [DESIGN.md](DESIGN.md) for why it looks like this.
 
