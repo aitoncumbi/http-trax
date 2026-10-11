@@ -36,6 +36,11 @@ fn parses_commands() {
         "--junit=out/report.xml",
         "--bail",
         "--no-color",
+        "--data",
+        "rows.csv",
+        "-n",
+        "3",
+        "--delay=250",
     ]))
     .unwrap() else {
         panic!("expected run")
@@ -53,6 +58,8 @@ fn parses_commands() {
     );
     assert_eq!(run.junit.as_deref(), Some("out/report.xml"));
     assert!(run.bail && run.no_color && !run.persist);
+    assert_eq!(run.data.as_deref(), Some("rows.csv"));
+    assert_eq!((run.iterations, run.delay_ms), (Some(3), 250));
 
     for bad in [
         &["frobnicate"][..],
@@ -61,6 +68,8 @@ fn parses_commands() {
         &["run", "--bail=yes"],
         &["run", "--junit"],
         &["run", "--nope"],
+        &["run", "-n", "0"],
+        &["run", "--delay", "soon"],
         &["run", "a", "b"],
     ] {
         assert!(parse(args(bad)).is_err(), "{bad:?} should not parse");
@@ -342,4 +351,41 @@ async fn lists_collections_and_environments() {
         "{out}"
     );
     assert!(out.contains("  Production  (protected)"), "{out}");
+}
+
+#[tokio::test]
+async fn data_driven_runs() {
+    let (_server, dir) = fixture().await;
+    let files = tempfile::tempdir().unwrap();
+    let rows = files.path().join("rows.csv");
+    std::fs::write(&rows, "id\n1\n2\n").unwrap();
+    let reports = files.path().to_string_lossy().into_owned();
+    let args = RunArgs {
+        collections: vec!["Health".into()],
+        data: Some(rows.to_string_lossy().into()),
+        junit: Some(format!("{reports}/junit.xml")),
+        json: Some(format!("{reports}/report.json")),
+        ..run_args(&dir)
+    };
+    let (result, out) = run_to_string(&args).await;
+    assert_eq!(result, Ok(true), "{out}");
+    assert!(out.contains("environment Local · 2 iterations"), "{out}");
+    assert!(out.contains("  Iteration 1 of 2\n  ✓ GET    Ping"), "{out}");
+    assert!(out.contains("  Iteration 2 of 2\n  ✓ GET    Ping"), "{out}");
+    assert!(out.contains("✓ All 2 requests passed"), "{out}");
+
+    let junit = std::fs::read_to_string(format!("{reports}/junit.xml")).unwrap();
+    assert!(
+        junit.contains(r#"<testsuite name="Health / Ping (iteration 2)""#),
+        "{junit}"
+    );
+    let json: Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{reports}/report.json")).unwrap())
+            .unwrap();
+    assert_eq!(json["collections"][0]["iterations"], 2);
+    assert_eq!(json["collections"][0]["requests"][1]["iteration"], 1);
+
+    std::fs::write(&rows, "id\n").unwrap();
+    let (result, _) = run_to_string(&args).await;
+    assert!(result.unwrap_err().ends_with("has no rows"));
 }

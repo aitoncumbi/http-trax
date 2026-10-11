@@ -110,7 +110,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [ ] MCP resources (collections, requests, environments) and prompts ("write tests for this endpoint")
 - [ ] `import_openapi` MCP tool and "generate requests and tests from an OpenAPI spec"
 - [x] Contract checks: validate responses against OpenAPI 3.x / Swagger 2.0 (path, method, status, content type, required headers, body schema) or a JSON Schema file, set per collection, folder or request and reported as a test
-- [ ] Data-driven runs (CSV/JSON iterations) and run delays
+- [x] Data-driven runs (CSV/JSON iterations, `trax.iterationData` / `pm.iterationData`) and run delays, in the app's runner, the CLI (`--data`, `--iterations`, `--delay`) and MCP `run_collection`
 - [ ] Mock servers that serve saved responses
 - [ ] Scheduled monitors with alerts
 - [ ] Script APIs: `trax.sendRequest`, crypto (hashes, HMAC), a vetted `require` set (lodash, dayjs, ajv), and a debugger

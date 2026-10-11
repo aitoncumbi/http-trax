@@ -1122,12 +1122,17 @@ const handlers: Record<string, (a: Args) => unknown> = {
       grp.items.forEach((it) => (it.kind === "request" ? all.push({ request: it.request, chain: [...chain, grp] }) : walk(it.group, [...chain, grp])));
     walk(g.group, []);
     await delay(600);
-    const results = all.map((x) => fakeRun(w, x.request, x.chain, (a.environmentId as string) ?? null));
+    // Data rows: a JSON array, or CSV lines after the header (no quoting here).
+    const text = typeof a.data === "string" ? a.data : "";
+    const rows = !text ? 0 : text.trim().startsWith("[") ? (JSON.parse(text) as unknown[]).length : text.trim().split(/\r?\n/).length - 1;
+    const iterations = Math.max(1, (a.iterations as number | null) ?? rows);
+    const runs = Array.from({ length: iterations }, (_, iteration) => all.map((x) => ({ ...x, iteration }))).flat();
+    const results = runs.map((x) => fakeRun(w, x.request, x.chain, (a.environmentId as string) ?? null));
     results.forEach((run) => recordHistory(w, run, (a.environmentId as string) ?? null));
     const items = results.map((res, i) => ({
-      requestId: all[i].request.id,
-      name: all[i].request.name,
-      method: all[i].request.method,
+      requestId: runs[i].request.id,
+      name: runs[i].request.name,
+      method: runs[i].request.method,
       url: res.request.url,
       status: res.response?.status,
       timeMs: res.response?.timeMs,
@@ -1135,6 +1140,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
       failed: 0,
       error: null,
       ok: true,
+      iteration: runs[i].iteration,
     }));
     return {
       report: {
@@ -1148,6 +1154,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
         testsPassed: items.reduce((n, i) => n + i.passed, 0),
         testsFailed: 0,
         durationMs: items.reduce((n, i) => n + (i.timeMs ?? 0), 0),
+        iterations,
       },
       results,
     };

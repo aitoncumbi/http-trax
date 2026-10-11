@@ -595,12 +595,15 @@ var __traxState = (function (input) {
       collectionName: info.collectionName || "",
       environmentName: info.environmentName || "",
       eventName: input.phase === "pre-request" ? "prerequest" : "test",
+      iteration: info.iteration || 0,
+      iterationCount: info.iterationCount || 1,
     },
     request: request,
     response: response,
     env: scope(env, envChanges, false),
     vars: scope(vars, varChanges, false),
     collectionVars: scope(collectionVars, {}, true),
+    iterationData: scope(input.iterationData || {}, {}, true),
     variables: {
       get: lookup,
       has: function (k) {
@@ -657,6 +660,7 @@ var __traxState = (function (input) {
     environment: trax.env,
     globals: trax.vars,
     collectionVariables: trax.collectionVars,
+    iterationData: trax.iterationData,
     variables: trax.variables,
     test: test,
     expect: expect,

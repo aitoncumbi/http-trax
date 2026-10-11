@@ -10,6 +10,7 @@ import type {
   GroupMeta,
   Request,
   Review,
+  RunnerOptions,
   RunResult,
   SavedResponse,
   SyncReport,
@@ -53,6 +54,8 @@ export interface RunnerTab extends TabBase {
   groupId: string;
   groupName: string;
   environmentId: string | null;
+  /** Iterations, delay and data file for the next run. */
+  options: RunnerOptions;
   run: CollectionRun | null;
   running: boolean;
   error: string | null;
@@ -729,6 +732,7 @@ export const useStore = create<Store>()((set, get) => {
         groupId,
         groupName: node.meta.name,
         environmentId,
+        options: {},
         run: null,
         running: true,
         error: null,
@@ -742,7 +746,7 @@ export const useStore = create<Store>()((set, get) => {
       if (!tab) return;
       get().updateTab<RunnerTab>(tabId, (t) => ({ ...t, running: true, error: null }));
       try {
-        const run = await api.runCollection(tab.workspaceId, tab.groupId, tab.environmentId, false);
+        const run = await api.runCollection(tab.workspaceId, tab.groupId, tab.environmentId, tab.options);
         get().updateTab<RunnerTab>(tabId, (t) => ({ ...t, run, running: false }));
         set((st) => ({ historyEpoch: st.historyEpoch + 1 }));
         void get().reloadTree();

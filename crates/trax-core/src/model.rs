@@ -786,6 +786,9 @@ pub struct CollectionRunItem {
     pub failed: usize,
     pub error: Option<String>,
     pub ok: bool,
+    /// Zero-based iteration of a data-driven run.
+    #[serde(default)]
+    pub iteration: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -801,4 +804,11 @@ pub struct CollectionRunReport {
     pub tests_passed: usize,
     pub tests_failed: usize,
     pub duration_ms: u64,
+    /// Times the collection ran (once per data row, or as asked).
+    #[serde(default = "one")]
+    pub iterations: usize,
+}
+
+fn one() -> usize {
+    1
 }

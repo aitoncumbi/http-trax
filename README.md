@@ -26,6 +26,7 @@ The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, `courion-cl
 - **Environments done right for git.** Shared values are committed; values your scripts set (like fresh tokens) stay on your machine, and secrets go to the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service). A secret can also be a vault reference the whole team shares (`op://` 1Password, `vault://` HashiCorp Vault, `azkv://` Azure Key Vault), read when the request is sent. Keep a whole environment off git with one switch, and mark production as protected so nothing is sent without a confirmation.
 - **MCP server for AI agents.** `courion-mcp` (`trax-mcp`) ships with the app. After an agent builds or changes a service, it can register the endpoints, attach tests, run them and read the failures. What it creates shows up in the app immediately, as files you review in git. You decide what agents may do (edit requests, run them, read responses, edit environments, see secrets), see which clients are connected, and what they changed.
 - **Contract checks.** Point a collection at your OpenAPI document (3.x or Swagger 2.0) and every response is checked against it: the path, method, status, content type and required headers must be documented, and the body must match the schema. A request can use a JSON Schema file instead, or opt out. Violations show up as a failing "contract" test in the app, for agents and in CI.
+- **Data-driven runs.** Run a collection once per row of a CSV or JSON file, with the row's values as `{{variables}}` and in `trax.iterationData` (`pm.iterationData`), or a set number of times, with a delay between requests. In the app's runner, from the CLI (`--data rows.csv`) and for agents.
 - **Runs in CI.** The `trax` CLI runs collections in a pipeline with the same runner as the app, exits non-zero when a test fails, and writes JUnit, JSON and Markdown reports. Secrets come from the pipeline's environment and are masked in the output.
 - **Import from anywhere.** Import OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments with example responses, HAR archives, Insomnia exports, and Bruno collections; `pm.*` scripts keep working.
 
@@ -67,7 +68,7 @@ Leave out `--workspace` to use whichever workspace is active in the app. The age
 | `upsert_request` | Add or update a request, including test scripts |
 | `move_item` | Move or reorder a request, folder, or collection |
 | `import_spec` | Import an OpenAPI, Postman, HAR, Insomnia, or Bruno spec/export into the workspace |
-| `run_request` / `run_collection` | Run and report status, tests, console output and body |
+| `run_request` / `run_collection` | Run and report status, tests, console output and body; collections can run once per data row, a set number of times, with a delay |
 | `send_http_request` | One-off request that isn't saved |
 | `list_history` / `restore_history_entry` | Search recent run history or restore a history run as a saved request |
 | `list_workspace_templates` / `create_onboarding_link` | Starter templates (also `init_workspace` with `template` or `onboarding_link`) and links for teammates |
@@ -84,6 +85,7 @@ Leave out `--workspace` to use whichever workspace is active in the app. The age
 trax list ./api-tests                                   # collections, folders, environments
 trax run ./api-tests -e Local                           # every collection
 trax run ./api-tests -e Local -c Users -c "Orders/Admin" --bail
+trax run ./api-tests -e Local -c Orders --data orders.csv --delay 200   # once per row
 ```
 
 It exits with `0` when every request passed, `1` when a test, a script or a request failed, and `2` for setup errors (no workspace, unknown collection or environment). Secrets aren't committed, so pass them from the pipeline: `--secret apiKey=API_KEY` sets the `apiKey` variable from the `API_KEY` environment variable and masks its value everywhere in the output. Plain values go in with `--var baseUrl=http://localhost:8080`. Protected environments need `--allow-protected`. Variables set by scripts aren't kept, and runs aren't added to history, unless you pass `--persist`.

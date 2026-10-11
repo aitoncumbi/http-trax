@@ -2,9 +2,10 @@
 //! the common shapes (maps or key/value lists, JSON bodies as objects, ...).
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde_json::{json, Map, Value};
-use trax_core::{Body, Contract, KeyValue, Variable};
+use trax_core::{Body, Contract, DataRow, KeyValue, Variable};
 
 pub fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)
@@ -172,6 +173,22 @@ pub fn contract(v: &Value) -> Result<Option<Contract>, String> {
                 .into(),
         ),
     }
+}
+
+/// Rows for a data-driven run: an array of objects, or the path of a CSV or
+/// JSON file relative to the workspace root.
+pub fn data(root: &Path, v: Option<&Value>) -> Result<Vec<DataRow>, String> {
+    let rows = match v {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::String(path)) => trax_core::load_data(&root.join(path)),
+        Some(rows @ Value::Array(_)) => trax_core::parse_data(&rows.to_string(), "data.json"),
+        Some(_) => return Err("`data` must be an array of objects or a file path".into()),
+    }
+    .map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        return Err("`data` has no rows".into());
+    }
+    Ok(rows)
 }
 
 /// Accept snake_case aliases inside `scripts`.

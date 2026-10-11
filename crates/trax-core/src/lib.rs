@@ -9,6 +9,7 @@ pub mod agents;
 pub mod auth;
 pub mod contract;
 pub mod cookies;
+pub mod data;
 pub mod diff;
 pub mod error;
 pub mod export;
@@ -29,6 +30,7 @@ pub mod workspace;
 
 pub use agents::{ActivityKind, AgentActivity, AgentPermissions, AgentSession};
 pub use cookies::{CookieInfo, CookieJar, CookieKey};
+pub use data::{load_data, parse_data, DataRow};
 pub use diff::{semantic_diff, ChangeKind, SemanticChange};
 pub use error::{Error, Result};
 pub use export::{prepare_export, ExportRequest};
@@ -45,7 +47,8 @@ pub use pr::{
 };
 pub use registry::{Registry, SyncSettings, WorkspaceEntry, WorkspacePrefs};
 pub use runner::{
-    run_draft, run_group, run_group_with_progress, run_saved, save_run_response, RunOptions,
+    run_draft, run_group, run_group_with_progress, run_saved, save_run_response, GroupRunOptions,
+    RunOptions,
 };
 pub use template::{
     apply_onboarding_spec, build_onboarding_link, create_workspace_from_template,

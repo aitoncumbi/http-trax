@@ -13,11 +13,12 @@
 //! 8. Persist variable changes to the workspace's local state.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
 use crate::cookies::CookieJar;
+use crate::data::DataRow;
 use crate::error::{Error, Result};
 use crate::http::{self, HttpRequest, PreparedBody, PreparedPart};
 use crate::interpolate::{interpolate, unresolved};
@@ -45,6 +46,34 @@ impl Default for RunOptions {
     }
 }
 
+/// How a collection run repeats and paces itself.
+#[derive(Debug, Clone, Default)]
+pub struct GroupRunOptions {
+    /// Stop at the first failing request, skipping the remaining iterations.
+    pub stop_on_failure: bool,
+    /// Data rows (`trax_core::data`): each is one iteration, its values
+    /// available as variables and through `trax.iterationData`.
+    pub data: Vec<DataRow>,
+    /// Iterations to run. Default: one per data row, or one. With more
+    /// iterations than rows, the last row repeats.
+    pub iterations: Option<usize>,
+    /// Pause before every request after the first, in milliseconds.
+    pub delay_ms: u64,
+}
+
+impl GroupRunOptions {
+    pub fn iteration_count(&self) -> usize {
+        self.iterations.unwrap_or(self.data.len()).max(1)
+    }
+
+    fn row(&self, iteration: usize) -> DataRow {
+        self.data
+            .get(iteration.min(self.data.len().saturating_sub(1)))
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
 /// Variable state for one run (or one collection run).
 pub(crate) struct Session {
     workspace_vars: BTreeMap<String, String>,
@@ -56,6 +85,13 @@ pub(crate) struct Session {
     var_delta: BTreeMap<String, Option<String>>,
     /// Shown in every run's console (e.g. a missing environment).
     warning: Option<String>,
+    /// The current data row of a data-driven run (also in `runtime`).
+    data: DataRow,
+    /// Runtime values the current row replaced, put back when the next
+    /// row doesn't have the key.
+    shadowed: BTreeMap<String, Option<String>>,
+    iteration: usize,
+    iteration_count: usize,
 }
 
 impl Session {
@@ -92,7 +128,30 @@ impl Session {
             env_delta: BTreeMap::new(),
             var_delta: BTreeMap::new(),
             warning,
+            data: DataRow::new(),
+            shadowed: BTreeMap::new(),
+            iteration: 0,
+            iteration_count: 1,
         })
+    }
+
+    /// Start an iteration of a data-driven run: the row's values override
+    /// runtime variables (scripts can still change them during the
+    /// iteration). They are never persisted, as only script changes are.
+    fn start_iteration(&mut self, iteration: usize, count: usize, row: DataRow) {
+        for (key, before) in std::mem::take(&mut self.shadowed) {
+            match before {
+                Some(v) => self.runtime.insert(key, v),
+                None => self.runtime.remove(&key),
+            };
+        }
+        for (key, value) in &row {
+            let before = self.runtime.insert(key.clone(), value.clone());
+            self.shadowed.insert(key.clone(), before);
+        }
+        self.data = row;
+        self.iteration = iteration;
+        self.iteration_count = count;
     }
 
     pub(crate) fn scope(
@@ -384,6 +443,7 @@ fn script_info(
             .map(|a| a.name.clone())
             .unwrap_or_default(),
         environment_name: env_name.to_string(),
+        ..Default::default()
     }
 }
 
@@ -463,7 +523,9 @@ async fn execute(
         headers: to_script_headers(&headers),
         body: body0.clone(),
     };
-    let info = script_info(request, ancestors, &session.env_name);
+    let mut info = script_info(request, ancestors, &session.env_name);
+    info.iteration = session.iteration;
+    info.iteration_count = session.iteration_count;
 
     // 2. Pre-request scripts.
     for (source, code) in pre {
@@ -476,6 +538,7 @@ async fn execute(
             v.extend(collection_vars.clone());
             v
         };
+        input.iteration_data = session.data.clone();
         input.info = info.clone();
         match run_script(code, input).await {
             Ok(out) => {
@@ -820,6 +883,7 @@ async fn execute(
             v.extend(collection_vars.clone());
             v
         };
+        input.iteration_data = session.data.clone();
         input.info = info.clone();
         match run_script(code, input).await {
             Ok(out) => {
@@ -960,16 +1024,21 @@ pub async fn run_group(
     opts: &RunOptions,
     stop_on_failure: bool,
 ) -> Result<(CollectionRunReport, Vec<RunResult>)> {
-    run_group_with_progress(ws, group_id, opts, stop_on_failure, |_, _| {}).await
+    let run = GroupRunOptions {
+        stop_on_failure,
+        ..Default::default()
+    };
+    run_group_with_progress(ws, group_id, opts, &run, |_, _| {}).await
 }
 
-/// [`run_group`], calling `on_result` as each request finishes (live output
-/// for the CLI).
+/// [`run_group`] with iterations, data rows and delays, calling `on_result`
+/// as each request finishes (live output for the CLI). Iterations share one
+/// variable session, so a token from the first one is reused.
 pub async fn run_group_with_progress(
     ws: &Workspace,
     group_id: &str,
     opts: &RunOptions,
-    stop_on_failure: bool,
+    run: &GroupRunOptions,
     mut on_result: impl FnMut(&CollectionRunItem, &RunResult),
 ) -> Result<(CollectionRunReport, Vec<RunResult>)> {
     let started = Instant::now();
@@ -983,31 +1052,39 @@ pub async fn run_group_with_progress(
     let mut session = Session::load(ws, opts)?;
     let mut items = Vec::new();
     let mut results = Vec::new();
-    for summary in group.requests() {
-        let ctx = ws.request_context(&summary.id)?;
-        let result = execute(ws, &mut session, &ctx.request, &ctx.ancestors).await;
-        // A request skipped by its pre-request script counts as passed.
-        let ok = result.ok() || result.skipped;
-        let item = CollectionRunItem {
-            request_id: summary.id.clone(),
-            name: summary.name.clone(),
-            method: ctx.request.method.clone(),
-            url: result.request.url.clone(),
-            status: result.response.as_ref().map(|r| r.status),
-            time_ms: result.response.as_ref().map(|r| r.time_ms),
-            passed: result.tests_passed(),
-            failed: result.tests_failed(),
-            error: result
-                .error
-                .clone()
-                .or_else(|| result.script_errors.first().map(|e| e.message.clone())),
-            ok,
-        };
-        on_result(&item, &result);
-        items.push(item);
-        results.push(result);
-        if stop_on_failure && !ok {
-            break;
+    let iterations = run.iteration_count();
+    'run: for iteration in 0..iterations {
+        session.start_iteration(iteration, iterations, run.row(iteration));
+        for summary in group.requests() {
+            if run.delay_ms > 0 && !results.is_empty() {
+                tokio::time::sleep(Duration::from_millis(run.delay_ms)).await;
+            }
+            let ctx = ws.request_context(&summary.id)?;
+            let result = execute(ws, &mut session, &ctx.request, &ctx.ancestors).await;
+            // A request skipped by its pre-request script counts as passed.
+            let ok = result.ok() || result.skipped;
+            let item = CollectionRunItem {
+                request_id: summary.id.clone(),
+                name: summary.name.clone(),
+                method: ctx.request.method.clone(),
+                url: result.request.url.clone(),
+                status: result.response.as_ref().map(|r| r.status),
+                time_ms: result.response.as_ref().map(|r| r.time_ms),
+                passed: result.tests_passed(),
+                failed: result.tests_failed(),
+                error: result
+                    .error
+                    .clone()
+                    .or_else(|| result.script_errors.first().map(|e| e.message.clone())),
+                ok,
+                iteration,
+            };
+            on_result(&item, &result);
+            items.push(item);
+            results.push(result);
+            if run.stop_on_failure && !ok {
+                break 'run;
+            }
         }
     }
     if opts.persist {
@@ -1024,6 +1101,7 @@ pub async fn run_group_with_progress(
         tests_passed: items.iter().map(|i| i.passed).sum(),
         tests_failed: items.iter().map(|i| i.failed).sum(),
         duration_ms: started.elapsed().as_millis() as u64,
+        iterations,
         items,
     };
     Ok((report, results))
@@ -1351,5 +1429,91 @@ paths:
         let r = run_saved(&ws, &req.id, &opts(&env)).await.unwrap();
         assert_eq!(r.tests.len(), 1);
         assert!(r.ok());
+    }
+
+    #[tokio::test]
+    async fn data_driven_iterations() {
+        let (_dir, ws, server, meta, env) = setup().await;
+        Mock::given(method("GET"))
+            .and(path("/users"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        ws.update_local_state(|s| {
+            s.runtime_variables.insert("name".into(), "stale".into());
+        })
+        .unwrap();
+        let mut req = Request::new("Find", "GET", "{{baseUrl}}/users?name={{name}}&n={{n}}");
+        req.scripts.post_response = r#"
+            trax.test("row " + trax.info.iteration + "/" + trax.info.iterationCount, () =>
+                trax.expect(trax.iterationData.get("name")).toBe(trax.variables.get("name")));
+            trax.variables.set("seen", (Number(trax.variables.get("seen") || 0) + 1).toString());
+        "#
+        .into();
+        ws.create_request(&meta.id, req).unwrap();
+        let data = crate::data::parse_data(
+            "name,n
+ada,1
+grace
+",
+            "rows.csv",
+        )
+        .unwrap();
+
+        let run = GroupRunOptions {
+            data,
+            iterations: Some(3),
+            delay_ms: 5,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        let (report, results) =
+            run_group_with_progress(&ws, &meta.id, &opts(&env), &run, |_, _| {})
+                .await
+                .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(10), "two delays");
+        assert_eq!(report.iterations, 3);
+        assert_eq!(report.total, 3);
+        assert_eq!(
+            report.items.iter().map(|i| i.iteration).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        let urls: Vec<&str> = results.iter().map(|r| r.request.url.as_str()).collect();
+        // Grace's row has no `n`: the previous row's value doesn't leak.
+        assert!(urls[0].ends_with("/users?name=ada&n=1"), "{urls:?}");
+        assert!(urls[1].ends_with("/users?name=grace&n={{n}}"), "{urls:?}");
+        // More iterations than rows: the last row repeats.
+        assert!(urls[2].ends_with("/users?name=grace&n={{n}}"), "{urls:?}");
+        assert_eq!(results[2].tests[0].name, "row 2/3");
+        assert!(results.iter().all(|r| r.tests[0].passed));
+
+        // Variables set by scripts carry over; data rows are never persisted.
+        let state = ws.local_state().unwrap();
+        assert_eq!(state.runtime_variables["seen"], "3");
+        assert_eq!(state.runtime_variables["name"], "stale");
+        assert!(!state.runtime_variables.contains_key("n"));
+
+        // Stop on failure ends the remaining iterations too.
+        let mut failing = Request::new("Fail", "GET", "{{baseUrl}}/nope");
+        failing.scripts.post_response =
+            "trax.test('ok', () => trax.expect(trax.response.status).toBe(200));".into();
+        ws.create_request(&meta.id, failing).unwrap();
+        let run = GroupRunOptions {
+            data: crate::data::parse_data(
+                "name
+ada
+",
+                "rows.csv",
+            )
+            .unwrap(),
+            iterations: Some(3),
+            stop_on_failure: true,
+            ..Default::default()
+        };
+        let (report, _) = run_group_with_progress(&ws, &meta.id, &opts(&env), &run, |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(report.total, 2);
+        assert_eq!(report.failed, 1);
     }
 }
