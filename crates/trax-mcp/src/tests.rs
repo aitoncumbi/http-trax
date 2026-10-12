@@ -605,6 +605,93 @@ paths:
 }
 
 #[tokio::test]
+async fn agent_generates_tests_from_a_spec_file() {
+    let api = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/pets"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": 9, "name": "Rex" })))
+        .mount(&api)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pets/9"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": 9, "name": "Rex" })))
+        .mount(&api)
+        .await;
+    let h = Harness::new();
+    // The spec sits next to the workspace, as in a service repository.
+    std::fs::write(
+        h.repo.path().join("openapi.yaml"),
+        format!(
+            r#"
+openapi: 3.0.3
+info: {{ title: Pets }}
+servers: [{{ url: "{}" }}]
+paths:
+  /pets:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: {{ $ref: '#/components/schemas/Pet' }}
+      responses:
+        201:
+          description: Created
+          content:
+            application/json:
+              schema: {{ $ref: '#/components/schemas/Pet' }}
+  /pets/{{petId}}:
+    get:
+      parameters: [{{ name: petId, in: path, required: true, schema: {{ type: integer }} }}]
+      responses:
+        200:
+          description: The pet
+          content:
+            application/json:
+              schema: {{ $ref: '#/components/schemas/Pet' }}
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id: {{ type: integer, readOnly: true }}
+        name: {{ type: string }}
+"#,
+            api.uri()
+        ),
+    )
+    .unwrap();
+    h.tool(
+        "init_workspace",
+        json!({ "path": h.repo.path().join("api-tests").to_string_lossy() }),
+    )
+    .await;
+
+    let (text, _, err) = h.tool("import_spec", json!({})).await;
+    assert!(err && text.contains("`content`"), "{text}");
+
+    let (text, summary, err) = h
+        .tool(
+            "import_spec",
+            json!({ "spec_path": "../openapi.yaml", "generate_tests": true }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert!(
+        text.contains("with 2 status test(s) and contract checks against ../openapi.yaml"),
+        "{text}"
+    );
+    assert_eq!(summary["contract"], "../openapi.yaml");
+
+    let (text, report, err) = h
+        .tool("run_collection", json!({ "collection": "Pets" }))
+        .await;
+    assert!(!err, "{text}");
+    assert_eq!(report["testsPassed"], 4, "{text}");
+    assert_eq!(report["testsFailed"], 0, "{text}");
+}
+
+#[tokio::test]
 async fn agent_runs_a_collection_per_data_row() {
     let api = MockServer::start().await;
     Mock::given(method("GET"))

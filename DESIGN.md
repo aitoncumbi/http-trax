@@ -75,6 +75,8 @@ A workspace is a directory. It can be its own repository (a team's shared collec
     staging.env.yaml
   responses/
     <request-id>/<response-id>.yaml           saved responses ("examples")
+  specs/
+    orders-api.yaml                           copy of an imported spec, for contract checks
 ```
 
 Decisions:
@@ -153,6 +155,16 @@ A collection or folder can name an OpenAPI document, and a request a JSON Schema
 - **Validation** uses the `jsonschema` crate without its HTTP and file retrievers: only local `$ref`s resolve (the spec's `components` and `definitions` are put next to the response schema). OpenAPI 3.0 and Swagger 2.0 schemas are validated as draft 4 (`exclusiveMinimum: true`, `$ref` siblings ignored), with 3.0's `nullable: true` rewritten to allow `null`; OpenAPI 3.1 as draft 2020-12; a standalone schema file by its own `$schema`. Formats are not checked, as in most OpenAPI tooling, because servers rarely agree on `date-time` or `email` edge cases and a contract test should fail on real drift.
 - **Paths are relative to the workspace root and may leave it** (`../openapi.yaml`): in a service repository the spec usually lives next to the code, not inside `api-tests/`. Documents are parsed once and cached until the file changes. Missing or unparseable files fail the contract test with the reason rather than the run.
 - The field is optional, so `FORMAT_VERSION` stays at 1. The semantic diff reports "Contract added/changed/removed", and the semantic merge treats it as one field.
+
+### Tests from an OpenAPI spec
+
+An OpenAPI import can generate tests (`ImportOptions::tests`: "Generate tests" in the import dialog, `generate_tests` for agents). It writes ordinary scripts and settings that the runner doesn't treat specially, so they can be read, edited and reviewed like hand-written tests.
+
+- **A status test per request** for the documented 2xx codes: `toBe(201)`, `toBeOneOf([200, 201])` when several are documented, a range check for `2XX`. Operations that document only errors or `default` get none. Everything else the spec says (schemas, content types, required headers) is left to contract checks rather than written out as per-field assertions, so a spec change doesn't mean regenerating tests.
+- **The collection's contract points at the spec.** When the spec's file is known (picked with the app's file dialog, `spec_path` for agents) it is stored relative to the workspace (`../openapi.yaml`), so the checks follow the spec as the service changes. Pasted text is saved word for word in `specs/<collection>.yaml` (or `.json`) instead, and so is a file no relative path reaches (another drive on Windows), with a note saying so.
+- **Ids are chained by a narrow rule.** A `POST /pets` whose 2xx response schema has a property named like the parameter of a `/pets/{petId}` path, else `id`, saves it with `trax.vars.set("petId", ...)`; runtime variables beat collection variables, so the requests on `/pets/{petId}` use the new pet. Nothing is guessed beyond that (no wrapped `data.id`, no creating PUTs).
+- **Run order.** Requests are created path by path (`serde_json` keeps keys sorted, so `/pets` comes before `/pets/{petId}`), methods in the order get, post, put, patch, delete, and each DELETE after everything below its path. Running the collection top to bottom creates before it reads and deletes last.
+- **Requests that can be sent.** Bodies and parameters follow local `$ref`s, merge `allOf`, take the first of `oneOf`/`anyOf`, and use examples, defaults, enums and formats before placeholders. Request bodies leave out `readOnly` properties and example responses leave out `writeOnly` ones. Optional parameters without an example are switched off rather than sent empty, and path parameters with an example become collection variables. Swagger 2.0 `body` and `formData` parameters become JSON, form or multipart bodies.
 
 ### OAuth 2.0
 
@@ -267,7 +279,7 @@ The interface follows the "Courion" design (dark first, quiet chrome, one indigo
 - **Readable diffs.** For workspace files Source control shows semantic changes by default ("URL changed", "Header added", "Body updated · currency", "Test added", "Variable updated"), computed by `trax_core::diff::semantic_diff` from the before and after YAML. Secrets show as "secret · not synced". Raw shows the line diff with old and new line numbers. Files that aren't workspace YAML, and conflicted files, show the line diff only.
 - **History** lists recent runs (from the app and from agents through MCP) grouped by day. It is local to the machine (`.trax/history.json`, last 300 runs) and never committed.
 - **Command palette** (Ctrl/Cmd+K) searches requests by name, URL and path, lists recent runs, and runs commands. Ctrl/Cmd+. on a request opens its actions (open, open and send, copy URL).
-- **Import** takes a cURL command, OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments, HAR archives, Insomnia exports, or Bruno collections (`trax_core::import`). Postman's `pm.*` scripts keep working, example responses are preserved as saved responses, and OAuth 2.0 settings are carried over (not the tokens). Any format can also be imported programmatically by agents via the `import_spec` MCP tool.
+- **Import** takes a cURL command, OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments, HAR archives, Insomnia exports, or Bruno collections (`trax_core::import`). Postman's `pm.*` scripts keep working, example responses are preserved as saved responses, and OAuth 2.0 settings are carried over (not the tokens). Any format can also be imported programmatically by agents via the `import_spec` MCP tool. OpenAPI imports can [generate tests](#tests-from-an-openapi-spec); in the desktop app the file is picked with the native dialog, so its path is known and contract checks can follow it.
 - **Bookmarks** pin collections to a "Pinned" section at the top of the tree, in the order they were pinned. **Scope** shows only one collection and hides the others until "Show all". Both are per-user, per-workspace preferences stored in the registry.
 - **State:** a Zustand store (`src/lib/store.ts`) plus small ones for Source control and the agents view, whose sidebar and card halves share state. Tabs are kept per workspace, so switching teams and back restores your tabs. Dirty state is a comparison of the draft with the last saved snapshot.
 - **Theme:** design tokens as CSS variables (`src/app/globals.css`) mapped into Tailwind v4's theme; dark by default, light derived from the same tokens. Inter for the interface and JetBrains Mono for code, bundled with the app (no font requests at runtime). CodeMirror 6 for editors, with a highlight style that uses the same tokens.

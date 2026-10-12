@@ -35,7 +35,7 @@ pub use diff::{semantic_diff, ChangeKind, SemanticChange};
 pub use error::{Error, Result};
 pub use export::{prepare_export, ExportRequest};
 pub use history::HistoryEntry;
-pub use import::ImportSummary;
+pub use import::{ImportOptions, ImportSummary};
 pub use merge::{semantic_merge, FieldConflict, MergeSide, SemanticMergePreview};
 pub use model::*;
 pub use pr::{

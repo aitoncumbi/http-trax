@@ -23,6 +23,7 @@ import type {
   HistoryEntry,
   GroupNode,
   Identity,
+  ImportOptions,
   ImportSummary,
   LocalState,
   MergeSide,
@@ -200,7 +201,9 @@ export const api = {
   // environments: git and protection
   setEnvironmentShared: (workspaceId: string, id: string, shared: boolean) =>
     call<EnvironmentView>("set_environment_shared", { workspaceId, id, shared }),
-  importJson: (workspaceId: string, json: string) => call<ImportSummary>("import_json", { workspaceId, json }),
+  importJson: (workspaceId: string, json: string, options?: ImportOptions) =>
+    call<ImportSummary>("import_json", { workspaceId, json, options: options ?? null }),
+  readImportFile: (path: string) => call<string>("read_import_file", { path }),
 
   // agents
   agentOverview: (workspaceId: string | null) => call<AgentOverview>("agent_overview", { workspaceId }),
@@ -339,6 +342,14 @@ export async function pickDirectory(title: string): Promise<string | null> {
   if (!isTauri()) return null;
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({ directory: true, multiple: false, title });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Native file picker; `null` when cancelled or unavailable. */
+export async function pickFile(title: string, extensions: string[]): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ multiple: false, title, filters: [{ name: "Specs and exports", extensions }] });
   return typeof picked === "string" ? picked : null;
 }
 

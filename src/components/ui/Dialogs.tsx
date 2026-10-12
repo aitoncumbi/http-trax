@@ -3,7 +3,7 @@
 import { AlertTriangle, Check, Copy, FolderOpen, GitBranch, Link2, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { api, errorMessage, isTauri, pickDirectory } from "@/lib/api";
+import { api, errorMessage, isTauri, pickDirectory, pickFile } from "@/lib/api";
 import { generate, SNIPPET_LANGS, type SnippetLang } from "@/lib/codegen";
 import { parseCurl } from "@/lib/curl";
 import { useStore, type WorkspaceDialogMode } from "@/lib/store";
@@ -441,13 +441,30 @@ function groupOptions(collections: GroupNode[]): { id: string; label: string }[]
   return out;
 }
 
+/** An OpenAPI or Swagger document, JSON or YAML. */
+function isOpenApi(text: string): boolean {
+  return /(^|[{,])\s*["']?(openapi|swagger)["']?\s*:/m.test(text);
+}
+
 function SpecImport({ close }: { close: () => void }) {
   const workspaceId = useStore((s) => s.activeWorkspaceId);
   const { reloadTree, bumpGit, toast, setView } = useStore.getState();
   const [text, setText] = useState("");
   const [file, setFile] = useState<string | null>(null);
+  // Where the picked file lives (desktop app only), so contract checks can follow it.
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [tests, setTests] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const openapi = isOpenApi(text);
+  const chosen = file ? (
+    <span className="font-mono text-[12.5px]" title={filePath ?? undefined}>
+      {file}
+    </span>
+  ) : (
+    "Choose a file (.json, .yaml, .yml, .har)"
+  );
+  const dropZone = "flex h-[72px] w-full cursor-pointer items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong text-[13.5px] text-text-2 hover:bg-hover";
 
   return (
     <form
@@ -458,12 +475,15 @@ function SpecImport({ close }: { close: () => void }) {
         setBusy(true);
         setError(null);
         try {
-          const summary = await api.importJson(workspaceId, text);
+          const summary = await api.importJson(workspaceId, text, openapi ? { tests, specPath: filePath ?? "" } : undefined);
           await reloadTree();
           bumpGit();
           close();
+          const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
           const what = summary.collections.length
-            ? `${summary.requests} request${summary.requests === 1 ? "" : "s"} imported`
+            ? `${plural(summary.requests, "request")} imported${
+                summary.contract ? `, with ${plural(summary.tests, "status test")} and contract checks against ${summary.contract}` : ""
+              }`
             : `Environment ${summary.environments.join(", ")} imported`;
           toast("success", summary.warnings.length ? `${what}. ${summary.warnings.length} note(s): ${summary.warnings.join(" ")}` : what);
           setView(summary.collections.length ? "collections" : "environments");
@@ -476,20 +496,42 @@ function SpecImport({ close }: { close: () => void }) {
       <p className="text-[13px] leading-[19px] text-muted">
         Import an OpenAPI 3 / Swagger spec (YAML or JSON), Postman collection or environment (v2.1), HAR archive, Insomnia export, or Bruno collection. Pick a file or paste its contents.
       </p>
-      <label className="flex h-[72px] cursor-pointer items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong text-[13.5px] text-text-2 hover:bg-hover">
-        <input
-          type="file"
-          accept=".json,.yaml,.yml,.har,application/json,text/yaml,text/x-yaml,application/x-yaml"
-          className="sr-only"
-          onChange={async (e) => {
-            const f = e.target.files?.[0];
-            if (!f) return;
-            setFile(f.name);
-            setText(await f.text());
+      {isTauri() ? (
+        <button
+          type="button"
+          className={dropZone}
+          onClick={async () => {
+            const picked = await pickFile("Choose a spec or export", ["json", "yaml", "yml", "har"]);
+            if (!picked) return;
+            try {
+              setText(await api.readImportFile(picked));
+              setFile(picked.split(/[\\/]/).pop() || picked);
+              setFilePath(picked);
+              setError(null);
+            } catch (err) {
+              setError(errorMessage(err));
+            }
           }}
-        />
-        {file ? <span className="font-mono text-[12.5px]">{file}</span> : "Choose a file (.json, .yaml, .yml, .har)"}
-      </label>
+        >
+          {chosen}
+        </button>
+      ) : (
+        <label className={dropZone}>
+          <input
+            type="file"
+            accept=".json,.yaml,.yml,.har,application/json,text/yaml,text/x-yaml,application/x-yaml"
+            className="sr-only"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              setFile(f.name);
+              setFilePath(null);
+              setText(await f.text());
+            }}
+          />
+          {chosen}
+        </label>
+      )}
       <div>
         <label htmlFor="spec-content" className="label">
           Or paste JSON / YAML
@@ -500,12 +542,36 @@ function SpecImport({ close }: { close: () => void }) {
           onChange={(e) => {
             setText(e.target.value);
             setFile(null);
+            setFilePath(null);
           }}
           spellCheck={false}
           placeholder='{"openapi": "3.0.0", ...} or {"info": {"name": "Orders API"}, "item": [...]}'
           className="input h-28 resize-none py-2.5 font-mono text-[12.5px] leading-[19px]"
         />
       </div>
+      {openapi && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 text-[12.5px] text-text-2">
+            <input type="checkbox" checked={tests} onChange={(e) => setTests(e.target.checked)} className="accent-[var(--accent)]" />
+            Generate tests
+          </label>
+          <p className="pl-[22px] text-[12px] leading-[17px] text-muted">
+            A status check on every request, every response checked against the spec, and ids that POSTs create passed on to the requests that use them.
+            {tests &&
+              (filePath ? (
+                <>
+                  {" "}
+                  Contract checks follow <span className="font-mono">{file}</span> as it changes.
+                </>
+              ) : (
+                <>
+                  {" "}
+                  A copy of the spec is saved in <span className="font-mono">specs/</span> for the contract checks.
+                </>
+              ))}
+          </p>
+        </div>
+      )}
       {error && <p className="text-[12.5px] text-danger">{error}</p>}
       <div className="flex justify-end gap-2">
         <button type="button" className="btn" onClick={close}>

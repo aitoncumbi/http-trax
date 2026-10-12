@@ -525,18 +525,34 @@ pub async fn clear_cookies(
     CookieJar::of(&ws).clear(domain.as_deref()).str_err()
 }
 
-/// Import a Postman collection or environment export.
+/// Import a spec or another client's export. `options` apply to OpenAPI
+/// specs (generated tests, the spec file contract checks use).
 #[tauri::command]
 pub async fn import_json(
     state: State<'_, AppState>,
     workspace_id: String,
     json: String,
+    options: Option<ImportOptions>,
 ) -> CmdResult<ImportSummary> {
     let ws = state.workspace(&workspace_id)?;
-    tauri::async_runtime::spawn_blocking(move || ws.import_json(&json))
+    let options = options.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || ws.import_with(&json, &options))
         .await
         .str_err()?
         .str_err()
+}
+
+/// Read a file the user picked to import. Only the formats import takes.
+#[tauri::command]
+pub async fn read_import_file(path: String) -> CmdResult<String> {
+    let ext = Path::new(&path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "json" | "yaml" | "yml" | "har") {
+        return Err("only .json, .yaml, .yml and .har files can be imported".into());
+    }
+    tokio::fs::read_to_string(&path).await.str_err()
 }
 
 /// Set (Some) or clear (None) a local override ("current value").

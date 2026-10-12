@@ -6,8 +6,8 @@ use std::path::Path;
 use serde_json::{json, Value};
 use trax_core::{
     run_draft, run_group_with_progress, run_saved, save_run_response, ActivityKind,
-    AgentPermissions, CookieJar, Environment, GroupMeta, GroupNode, GroupRunOptions, Registry,
-    Request, RunOptions, RunResult, TreeItem, Workspace,
+    AgentPermissions, CookieJar, Environment, GroupMeta, GroupNode, GroupRunOptions, ImportOptions,
+    Registry, Request, RunOptions, RunResult, TreeItem, Workspace,
 };
 
 use crate::args::{self, opt_bool, opt_str, opt_u64, req_str};
@@ -307,14 +307,15 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "import_spec",
             "title": "Import an API spec or collection",
-            "description": "Import an OpenAPI 3.x spec (JSON or YAML), Postman collection/environment, HAR archive, Insomnia, or Bruno export into the workspace.",
+            "description": "Import an OpenAPI 3.x / Swagger 2.0 spec (JSON or YAML), Postman collection/environment, HAR archive, Insomnia, or Bruno export into the workspace. For an OpenAPI spec, generate_tests also adds a status test to every request, checks every response against the spec (contract checks) and passes the ids POSTs create to the /{id} requests, so run_collection tests the API right away.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "workspace": workspace_prop(),
-                    "content": { "type": "string", "description": "The JSON or YAML text of the spec or collection export to import." }
-                },
-                "required": ["content"]
+                    "content": { "type": "string", "description": "The JSON or YAML text to import. Omit it to read spec_path." },
+                    "spec_path": { "type": "string", "description": "The spec's file, relative to the workspace or absolute (e.g. ../openapi.yaml when the workspace is a folder of the service's repo). Read when content is omitted. With generate_tests, contract checks use this file, so they follow the spec as it changes; without it they use a copy saved in specs/." },
+                    "generate_tests": { "type": "boolean", "description": "OpenAPI and Swagger only: generate status tests, contract checks and id chaining (default false)." }
+                }
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
         }),
@@ -1659,9 +1660,19 @@ fn clear_cookies(server: &Server, args: &Value) -> Result<ToolOutput, String> {
 
 fn import_spec(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     let (ws, _) = workspace(server, args)?;
-    let content = req_str(args, "content")?;
-    let summary = ws.import_json(content).map_err(err)?;
-    let what = if !summary.collections.is_empty() {
+    let spec_path = opt_str(args, "spec_path").unwrap_or_default();
+    let content = match opt_str(args, "content") {
+        Some(content) => content.to_string(),
+        None if !spec_path.is_empty() => std::fs::read_to_string(ws.root().join(spec_path))
+            .map_err(|e| format!("can't read {spec_path}: {e}"))?,
+        None => return Err("missing required argument `content` (or `spec_path`)".into()),
+    };
+    let options = ImportOptions {
+        tests: opt_bool(args, "generate_tests").unwrap_or(false),
+        spec_path: spec_path.to_string(),
+    };
+    let summary = ws.import_with(&content, &options).map_err(err)?;
+    let mut what = if !summary.collections.is_empty() {
         format!(
             "Imported {} collection(s) and {} request(s)",
             summary.collections.len(),
@@ -1672,6 +1683,12 @@ fn import_spec(server: &Server, args: &Value) -> Result<ToolOutput, String> {
     } else {
         format!("Imported {} request(s)", summary.requests)
     };
+    if let Some(spec) = &summary.contract {
+        what.push_str(&format!(
+            ", with {} status test(s) and contract checks against {spec}",
+            summary.tests
+        ));
+    }
     server.record(&ws, ActivityKind::Created, what.clone());
     Ok(ToolOutput::with(
         if summary.warnings.is_empty() {
