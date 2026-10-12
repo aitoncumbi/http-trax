@@ -135,6 +135,15 @@ A failing pre-request script stops the request from being sent. Errors are value
 
 Collection runs execute requests depth-first in display order and share one variable session, so a login request can feed a token to every request after it.
 
+### Data-driven runs
+
+A collection run can repeat: once per row of a data file (`trax_core::data`: CSV with a header row and RFC 4180 quoting, or a JSON array of objects) or a set number of times (`GroupRunOptions`), with an optional delay before every request after the first.
+
+- **Rows are variables.** At the start of each iteration the row's values override runtime variables, so `{{user}}` resolves to the row; scripts can still change them during the iteration, and read the row itself through `trax.iterationData` / `pm.iterationData` (read-only), with `trax.info.iteration` (zero-based) and `iterationCount`. A key the next row lacks gets its previous value back, so one row's value never leaks into the next.
+- **One session for all iterations**, so a token fetched in the first iteration is reused. Data rows are never persisted: only changes made by scripts reach `.trax/state.json`, as before.
+- **More iterations than rows** repeat the last row (as Postman does); no data means one iteration unless a count is given. "Stop on first failure" ends the whole run, not just the iteration.
+- Reports carry the iteration on every item (`iteration`, zero-based, and `iterations` on the report); the app groups results per iteration, the CLI prints "Iteration 2 of 3" and names JUnit suites "... (iteration 2)". Agents are limited to 1000 iterations and a 60-second delay.
+
 ### Contract checks
 
 A collection or folder can name an OpenAPI document, and a request a JSON Schema file (`contract:` in their YAML, `trax_core::contract`). The nearest setting applies, so a folder can point at another spec and a request can opt out with `off: true`.

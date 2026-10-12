@@ -129,9 +129,14 @@ pub fn report(r: &CollectionRunReport) -> String {
     let mut s = String::new();
     let _ = writeln!(
         s,
-        "Ran {} request(s) in \"{}\"{} — {} ok, {} failed; tests {} passed, {} failed ({} ms)",
+        "Ran {} request(s) in \"{}\"{}{} — {} ok, {} failed; tests {} passed, {} failed ({} ms)",
         r.total,
         r.group_name,
+        if r.iterations > 1 {
+            format!(" over {} iterations", r.iterations)
+        } else {
+            String::new()
+        },
         r.environment
             .as_ref()
             .map(|e| format!(" with environment \"{e}\""))
@@ -148,6 +153,9 @@ pub fn report(r: &CollectionRunReport) -> String {
             .map(|s| s.to_string())
             .unwrap_or_else(|| "—".into());
         let mark = if i.ok { "✓" } else { "✗" };
+        if r.iterations > 1 {
+            let _ = write!(s, "#{} ", i.iteration + 1);
+        }
         let _ = write!(
             s,
             "{mark} {} {} [{}] {} → {}",

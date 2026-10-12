@@ -605,6 +605,67 @@ paths:
 }
 
 #[tokio::test]
+async fn agent_runs_a_collection_per_data_row() {
+    let api = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/hello"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&api)
+        .await;
+    let h = Harness::new();
+    let ws_dir = h.repo.path().join("data-runs");
+    h.tool(
+        "init_workspace",
+        json!({ "path": ws_dir.to_string_lossy() }),
+    )
+    .await;
+    h.tool(
+        "upsert_collection",
+        json!({ "name": "Greetings", "variables": { "baseUrl": api.uri() } }),
+    )
+    .await;
+    h.tool(
+        "upsert_request",
+        json!({
+            "collection": "Greetings", "name": "Hello", "url": "{{baseUrl}}/hello?name={{name}}",
+            "scripts": { "postResponse": "trax.test('has a name', () => trax.expect(trax.iterationData.get('name')).toBeTruthy());" }
+        }),
+    )
+    .await;
+
+    let (text, report, err) = h
+        .tool(
+            "run_collection",
+            json!({ "collection": "Greetings", "data": [{ "name": "ada" }, { "name": "grace" }], "delay_ms": 1 }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert!(text.contains("over 2 iterations"), "{text}");
+    assert!(text.contains("#2 ✓ GET Hello"), "{text}");
+    assert!(text.contains("?name=grace"), "{text}");
+    assert_eq!(report["iterations"], 2);
+    assert_eq!(report["items"][1]["iteration"], 1);
+
+    // A data file in the workspace, and a run with too many iterations.
+    std::fs::write(ws_dir.join("names.csv"), "name\nlinus\n").unwrap();
+    let (text, report, err) = h
+        .tool(
+            "run_collection",
+            json!({ "collection": "Greetings", "data": "names.csv", "iterations": 3 }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert_eq!(report["total"], 3);
+    let (text, _, err) = h
+        .tool(
+            "run_collection",
+            json!({ "collection": "Greetings", "iterations": 5000 }),
+        )
+        .await;
+    assert!(err && text.contains("between 1 and 1000"), "{text}");
+}
+
+#[tokio::test]
 async fn agent_uses_templates_prs_and_review_comments() {
     let h = Harness::new();
     let (_, tpl_data, err) = h.tool("list_workspace_templates", json!({})).await;

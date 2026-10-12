@@ -41,6 +41,7 @@ import type {
   Review,
   AddReviewCommentInput,
   ReviewComment,
+  RunnerOptions,
   RunResult,
   SavedResponse,
   SigningSettings,
@@ -150,8 +151,17 @@ export const api = {
   // runs
   sendRequest: (workspaceId: string, request: Request, parentId: string | null, environmentId: string | null) =>
     call<RunResult>("send_request", { workspaceId, request, parentId, environmentId }),
-  runCollection: (workspaceId: string, groupId: string, environmentId: string | null, stopOnFailure: boolean) =>
-    call<CollectionRun>("run_collection", { workspaceId, groupId, environmentId, stopOnFailure }),
+  runCollection: (workspaceId: string, groupId: string, environmentId: string | null, options: RunnerOptions) =>
+    call<CollectionRun>("run_collection", {
+      workspaceId,
+      groupId,
+      environmentId,
+      stopOnFailure: options.stopOnFailure ?? false,
+      iterations: options.iterations ?? null,
+      delayMs: options.delayMs ?? null,
+      data: options.data?.text ?? null,
+      dataName: options.data?.name ?? null,
+    }),
 
   // saved responses
   listSavedResponses: (workspaceId: string, requestId: string) =>

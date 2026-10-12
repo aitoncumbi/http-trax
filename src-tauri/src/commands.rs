@@ -616,20 +616,44 @@ pub struct CollectionRun {
     pub results: Vec<RunResult>,
 }
 
+/// `data` is the text of a CSV or JSON data file (`data_name` picks the
+/// format): the collection runs once per row.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn run_collection(
     state: State<'_, AppState>,
     workspace_id: String,
     group_id: String,
     environment_id: Option<String>,
     stop_on_failure: bool,
+    iterations: Option<usize>,
+    delay_ms: Option<u64>,
+    data: Option<String>,
+    data_name: Option<String>,
 ) -> CmdResult<CollectionRun> {
     let ws = state.workspace(&workspace_id)?;
     let opts = RunOptions {
         environment: environment_id,
         ..Default::default()
     };
-    let (report, results) = run_group(&ws, &group_id, &opts, stop_on_failure)
+    let data = match data {
+        Some(text) => {
+            let name = data_name.unwrap_or_else(|| "data.csv".into());
+            let rows = parse_data(&text, &name).str_err()?;
+            if rows.is_empty() {
+                return Err(format!("{name} has no rows"));
+            }
+            rows
+        }
+        None => Vec::new(),
+    };
+    let run = GroupRunOptions {
+        stop_on_failure,
+        data,
+        iterations,
+        delay_ms: delay_ms.unwrap_or(0),
+    };
+    let (report, results) = run_group_with_progress(&ws, &group_id, &opts, &run, |_, _| {})
         .await
         .str_err()?;
     Ok(CollectionRun { report, results })

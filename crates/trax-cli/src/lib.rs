@@ -12,8 +12,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use trax_core::{
-    run_group_with_progress, CollectionRunItem, Environment, Error, GroupNode, Registry,
-    RunOptions, RunResult, TreeItem, Workspace, WorkspaceTree,
+    load_data, run_group_with_progress, CollectionRunItem, Environment, Error, GroupNode,
+    GroupRunOptions, Registry, RunOptions, RunResult, TreeItem, Workspace, WorkspaceTree,
 };
 
 use report::{plural, seconds, GroupRun, Summary};
@@ -36,6 +36,11 @@ RUN OPTIONS:
         --secret <key>[=<ENV>]    Set a variable from the process environment
                                   variable ENV (default: <key>); its value is
                                   masked in the output and reports
+        --data <file>             Run once per row of a CSV or JSON file; the
+                                  row's values are variables (and
+                                  trax.iterationData)
+    -n, --iterations <n>          Run n times (default: one per data row, or 1)
+        --delay <ms>              Pause between requests
         --bail                    Stop at the first failing request
         --junit <file>            Write a JUnit XML report
         --json <file>             Write a JSON report
@@ -60,7 +65,7 @@ EXAMPLE (GitHub Actions):
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     List { workspace: Option<String> },
     Help,
     Version,
@@ -76,6 +81,10 @@ pub struct RunArgs {
     pub vars: Vec<(String, String)>,
     /// `--secret key[=ENV]`: variable name and process environment variable.
     pub secrets: Vec<(String, String)>,
+    /// `--data`: CSV or JSON rows, one iteration each.
+    pub data: Option<String>,
+    pub iterations: Option<usize>,
+    pub delay_ms: u64,
     pub bail: bool,
     pub allow_protected: bool,
     pub persist: bool,
@@ -154,6 +163,20 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<Command, String> 
                 }
                 run.secrets.push((key.to_string(), env.to_string()));
             }
+            "--data" => run.data = Some(value()?),
+            "-n" | "--iterations" => {
+                let v = value()?;
+                run.iterations =
+                    Some(v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                        format!("--iterations expects a positive number, got {v:?}")
+                    })?);
+            }
+            "--delay" => {
+                let v = value()?;
+                run.delay_ms = v
+                    .parse()
+                    .map_err(|_| format!("--delay expects milliseconds, got {v:?}"))?;
+            }
             "--junit" => run.junit = Some(value()?),
             "--json" => run.json = Some(value()?),
             "--markdown" => run.markdown = Some(value()?),
@@ -170,7 +193,7 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<Command, String> 
             _ => return Err(format!("unexpected argument {arg:?}")),
         }
     }
-    Ok(Command::Run(run))
+    Ok(Command::Run(Box::new(run)))
 }
 
 // ------------------------------------------------------------- workspace
@@ -532,6 +555,24 @@ pub async fn run(args: &RunArgs, out: &mut dyn Write, color: bool) -> Result<boo
         variables.insert(key.clone(), value);
     }
 
+    let data = match &args.data {
+        Some(file) => {
+            let rows = load_data(Path::new(file)).map_err(err)?;
+            if rows.is_empty() {
+                return Err(format!("{file} has no rows"));
+            }
+            rows
+        }
+        None => Vec::new(),
+    };
+    let group_run = GroupRunOptions {
+        stop_on_failure: args.bail,
+        data,
+        iterations: args.iterations,
+        delay_ms: args.delay_ms,
+    };
+    let iterations = group_run.iteration_count();
+
     let mut warnings = Vec::new();
     let environment: Option<Environment> = match &args.environment {
         None => None,
@@ -585,14 +626,19 @@ pub async fn run(args: &RunArgs, out: &mut dyn Write, color: bool) -> Result<boo
         "{} {}",
         paint.bold("Courion"),
         paint.dim(&format!(
-            "· {} · {}",
+            "· {} · {}{}",
             tree.manifest.name,
             environment
                 .as_ref()
                 .map_or("no environment".to_string(), |e| format!(
                     "environment {}",
                     e.name
-                ))
+                )),
+            if iterations > 1 {
+                format!(" · {iterations} iterations")
+            } else {
+                String::new()
+            }
         ))
     );
     for w in &warnings {
@@ -608,13 +654,22 @@ pub async fn run(args: &RunArgs, out: &mut dyn Write, color: bool) -> Result<boo
     let mut runs = Vec::new();
     for target in &targets {
         let paths = request_paths(target.node);
+        let mut last_iteration = None;
         let _ = writeln!(out, "{}", paint.bold(&target.label));
         let (mut report, mut results) = run_group_with_progress(
             &ws,
             &target.node.meta.id,
             &opts,
-            args.bail,
+            &group_run,
             |item, result| {
+                if iterations > 1 && last_iteration != Some(item.iteration) {
+                    last_iteration = Some(item.iteration);
+                    let _ = writeln!(
+                        out,
+                        "  {}",
+                        paint.dim(&format!("Iteration {} of {iterations}", item.iteration + 1))
+                    );
+                }
                 let name = paths.get(&item.request_id).unwrap_or(&item.name);
                 write_request(out, &paint, &masker, name, item, result);
             },

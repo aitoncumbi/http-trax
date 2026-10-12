@@ -84,6 +84,12 @@ pub struct ScriptInfo {
     pub request_id: String,
     pub collection_name: String,
     pub environment_name: String,
+    /// Zero-based iteration of a data-driven collection run.
+    #[serde(default)]
+    pub iteration: usize,
+    /// Iterations in the run (0 is treated as 1).
+    #[serde(default)]
+    pub iteration_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +104,8 @@ pub struct ScriptInput {
     pub variables: BTreeMap<String, String>,
     /// Collection variables. Read-only from scripts.
     pub collection_variables: BTreeMap<String, String>,
+    /// The current data row of a data-driven run. Read-only from scripts.
+    pub iteration_data: BTreeMap<String, String>,
     pub info: ScriptInfo,
 }
 
@@ -110,6 +118,7 @@ impl ScriptInput {
             environment: BTreeMap::new(),
             variables: BTreeMap::new(),
             collection_variables: BTreeMap::new(),
+            iteration_data: BTreeMap::new(),
             info: ScriptInfo::default(),
         }
     }
@@ -264,6 +273,26 @@ mod tests {
         let out = run("   ", &pre(req.clone())).unwrap();
         assert_eq!(out.request, req);
         assert!(out.tests.is_empty());
+    }
+
+    #[test]
+    fn iteration_data_is_read_only() {
+        let mut input = pre(ScriptRequest {
+            method: "GET".into(),
+            url: "http://x".into(),
+            ..Default::default()
+        });
+        input.iteration_data.insert("user".into(), "ada".into());
+        input.info.iteration = 2;
+        input.info.iteration_count = 5;
+        let script = r#"
+            console.log(trax.iterationData.get("user"), pm.iterationData.get("user"),
+                trax.info.iteration, pm.info.iterationCount, trax.iterationData.has("nope"));
+            trax.iterationData.set("user", "x");
+        "#;
+        let out = run(script, &input).unwrap();
+        assert_eq!(out.logs[0].message, "ada ada 2 5 false");
+        assert!(out.error.unwrap().contains("read-only"));
     }
 
     #[test]

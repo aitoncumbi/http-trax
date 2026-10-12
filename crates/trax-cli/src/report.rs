@@ -29,9 +29,19 @@ impl GroupRun {
             .unwrap_or(&r.request_name)
     }
 
-    /// "Collection / Folder / Request".
-    fn full_name(&self, r: &RunResult) -> String {
-        format!("{} / {}", self.label, self.path(r))
+    /// "Collection / Folder / Request", plus "(iteration 2)" when the
+    /// collection ran more than once.
+    fn full_name(&self, index: usize) -> String {
+        let mut name = format!("{} / {}", self.label, self.path(&self.results[index]));
+        if self.report.iterations > 1 {
+            name.push_str(&format!(" (iteration {})", self.iteration(index) + 1));
+        }
+        name
+    }
+
+    /// Zero-based iteration of the result at `index`.
+    fn iteration(&self, index: usize) -> usize {
+        self.report.items.get(index).map_or(0, |i| i.iteration)
     }
 }
 
@@ -180,8 +190,8 @@ pub fn junit(runs: &[GroupRun], summary: &Summary) -> String {
     let (mut tests, mut failures, mut errors, mut skipped) = (0, 0, 0, 0);
     let mut suites = String::new();
     for run in runs {
-        for r in &run.results {
-            let name = xml_attr(&run.full_name(r));
+        for (index, r) in run.results.iter().enumerate() {
+            let name = xml_attr(&run.full_name(index));
             let cases = cases(r);
             let count = |f: fn(&Outcome) -> bool| cases.iter().filter(|c| f(&c.outcome)).count();
             let suite_failures = count(|o| matches!(o, Outcome::Failed(_)));
@@ -265,6 +275,7 @@ struct JsonGroup<'a> {
     id: &'a str,
     name: &'a str,
     duration_ms: u64,
+    iterations: usize,
     requests: Vec<JsonRequest<'a>>,
 }
 
@@ -274,6 +285,8 @@ struct JsonRequest<'a> {
     id: Option<&'a str>,
     name: &'a str,
     path: &'a str,
+    /// Zero-based, as in the app and MCP results.
+    iteration: usize,
     method: &'a str,
     url: &'a str,
     status: Option<u16>,
@@ -306,13 +319,16 @@ pub fn json(
                 id: &run.report.group_id,
                 name: &run.label,
                 duration_ms: run.report.duration_ms,
+                iterations: run.report.iterations,
                 requests: run
                     .results
                     .iter()
-                    .map(|r| JsonRequest {
+                    .enumerate()
+                    .map(|(index, r)| JsonRequest {
                         id: r.request_id.as_deref(),
                         name: &r.request_name,
                         path: run.path(r),
+                        iteration: run.iteration(index),
                         method: &r.request.method,
                         url: &r.request.url,
                         status: r.response.as_ref().map(|resp| resp.status),
@@ -413,14 +429,19 @@ pub fn markdown(
         );
     }
 
-    let failed: Vec<(&GroupRun, &RunResult)> = runs
+    let failed: Vec<(&GroupRun, usize, &RunResult)> = runs
         .iter()
-        .flat_map(|run| run.results.iter().map(move |r| (run, r)))
-        .filter(|(_, r)| !request_ok(r))
+        .flat_map(|run| {
+            run.results
+                .iter()
+                .enumerate()
+                .map(move |(i, r)| (run, i, r))
+        })
+        .filter(|(_, _, r)| !request_ok(r))
         .collect();
     if !failed.is_empty() {
         let _ = writeln!(s, "\n#### Failures");
-        for (run, r) in failed {
+        for (run, index, r) in failed {
             let status = r
                 .response
                 .as_ref()
@@ -429,7 +450,7 @@ pub fn markdown(
             let _ = writeln!(
                 s,
                 "\n**{}**: {}{status}",
-                md(&run.full_name(r)),
+                md(&run.full_name(index)),
                 md_code(&format!("{} {}", r.request.method, r.request.url))
             );
             if let Some(e) = &r.error {

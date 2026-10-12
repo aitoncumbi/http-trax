@@ -337,6 +337,8 @@ export interface CollectionRunItem {
   failed: number;
   error?: string | null;
   ok: boolean;
+  /** Zero-based iteration of a data-driven run. */
+  iteration?: number;
 }
 
 export interface CollectionRunReport {
@@ -350,6 +352,17 @@ export interface CollectionRunReport {
   testsPassed: number;
   testsFailed: number;
   durationMs: number;
+  /** Times the collection ran (once per data row, or as asked). */
+  iterations?: number;
+}
+
+/** How a collection run repeats: per data row or N times, with a delay. */
+export interface RunnerOptions {
+  iterations?: number;
+  delayMs?: number;
+  /** A CSV or JSON data file: one iteration per row. */
+  data?: { name: string; text: string } | null;
+  stopOnFailure?: boolean;
 }
 
 export interface CollectionRun {

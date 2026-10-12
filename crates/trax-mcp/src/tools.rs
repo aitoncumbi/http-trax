@@ -5,9 +5,9 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 use trax_core::{
-    run_draft, run_group, run_saved, save_run_response, ActivityKind, AgentPermissions, CookieJar,
-    Environment, GroupMeta, GroupNode, Registry, Request, RunOptions, RunResult, TreeItem,
-    Workspace,
+    run_draft, run_group_with_progress, run_saved, save_run_response, ActivityKind,
+    AgentPermissions, CookieJar, Environment, GroupMeta, GroupNode, GroupRunOptions, Registry,
+    Request, RunOptions, RunResult, TreeItem, Workspace,
 };
 
 use crate::args::{self, opt_bool, opt_str, opt_u64, req_str};
@@ -209,7 +209,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "folder": { "type": "string", "description": "Optional folder path inside the collection." },
                     "environment": environment_prop(),
                     "variables": variables_prop(),
-                    "stop_on_failure": { "type": "boolean", "description": "Stop at the first failing request (default false)." }
+                    "stop_on_failure": { "type": "boolean", "description": "Stop at the first failing request (default false)." },
+                    "data": { "description": "Data-driven run: rows as [{\"user\": \"ada\", \"qty\": 2}, ...] or the path of a CSV/JSON file in the workspace. The collection runs once per row, with the row's values as variables ({{user}}) and in trax.iterationData." },
+                    "iterations": { "type": "integer", "description": "Times to run (default: one per data row, or 1; at most 1000). With more iterations than rows, the last row repeats." },
+                    "delay_ms": { "type": "integer", "description": "Pause between requests, in milliseconds (at most 60000)." }
                 },
                 "required": ["collection"]
             },
@@ -1290,8 +1293,22 @@ async fn run_collection(
     let (ws, entry) = workspace(server, args)?;
     let group = group_by_path(&ws, req_str(args, "collection")?, opt_str(args, "folder"))?;
     let opts = run_options(server, args, entry.as_deref());
-    let stop = opt_bool(args, "stop_on_failure").unwrap_or(false);
-    let (report, results) = run_group(&ws, &group, &opts, stop).await.map_err(err)?;
+    let run = GroupRunOptions {
+        stop_on_failure: opt_bool(args, "stop_on_failure").unwrap_or(false),
+        data: args::data(ws.root(), args.get("data"))?,
+        iterations: match opt_u64(args, "iterations") {
+            Some(n @ 1..=1000) => Some(n as usize),
+            Some(n) => return Err(format!("`iterations` must be between 1 and 1000, got {n}")),
+            None => None,
+        },
+        delay_ms: match opt_u64(args, "delay_ms") {
+            Some(ms) if ms > 60_000 => return Err("`delay_ms` can be at most 60000".into()),
+            ms => ms.unwrap_or(0),
+        },
+    };
+    let (report, results) = run_group_with_progress(&ws, &group, &opts, &run, |_, _| {})
+        .await
+        .map_err(err)?;
     server.record(
         &ws,
         ActivityKind::Ran,
