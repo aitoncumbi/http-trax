@@ -3,7 +3,7 @@
 import { Wand2 } from "lucide-react";
 
 import type { Body, BodyMode, MultipartField } from "@/lib/types";
-import { prettyJson } from "@/lib/util";
+import { prettyJson, scrollSideways } from "@/lib/util";
 
 import { Radio } from "../ui/Controls";
 import { CodeEditor } from "./CodeEditor";
@@ -57,7 +57,7 @@ export function BodyEditor({ body, onChange }: { body: Body; onChange: (b: Body)
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-border-soft px-4">
-        <div role="radiogroup" aria-label="Body type" className="flex min-w-0 items-center gap-[18px] overflow-x-auto">
+        <div role="radiogroup" aria-label="Body type" onWheel={scrollSideways} className="tab-scroll flex min-w-0 items-center gap-[18px] self-stretch">
           {MODES.map((m) => (
             <Radio key={m.id} checked={body.mode === m.id} onChange={() => onChange(switchMode(body, m.id))}>
               {m.label}

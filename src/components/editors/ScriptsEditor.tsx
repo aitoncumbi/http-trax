@@ -65,7 +65,7 @@ export function ScriptsEditor({
   ];
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div role="tablist" aria-label="Script phase" className="flex h-[42px] shrink-0 items-stretch gap-5 border-b border-border-soft px-5">
+      <div role="tablist" aria-label="Script phase" className="tab-strip flex h-[38px] shrink-0 items-stretch gap-5 px-4 [--tab-line:var(--border-soft)]">
         {phases.map((p) => (
           <button
             key={p.id}
@@ -74,7 +74,7 @@ export function ScriptsEditor({
             aria-selected={phase === p.id}
             onClick={() => setPhase(p.id)}
             className={cx(
-              "-mb-px inline-flex items-center gap-2 border-b-2 text-[13.5px]",
+              "inline-flex items-center gap-2 border-b-2 text-[13.5px]",
               phase === p.id ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
             )}
           >

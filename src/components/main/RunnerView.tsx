@@ -19,7 +19,7 @@ function RunOptionsBar({ tab }: { tab: RunnerTab }) {
   const number = (v: string) => (v === "" ? undefined : Math.max(0, Math.floor(Number(v))) || undefined);
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-5 py-2.5 text-[13px]">
+    <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-4 py-2.5 text-[13px]">
       <label className="flex items-center gap-2 text-muted">
         Iterations
         <input
@@ -89,7 +89,7 @@ export function RunnerView({ tab }: { tab: RunnerTab }) {
       </PageHeader>
       <RunOptionsBar tab={tab} />
 
-      {tab.error && <p className="mx-5 mb-3 rounded-lg bg-danger-soft p-3 text-[13px] text-danger">{tab.error}</p>}
+      {tab.error && <p className="mx-4 mb-3 rounded-lg bg-danger-soft p-3 text-[13px] text-danger">{tab.error}</p>}
       {tab.running && !report && (
         <div className="flex flex-1 items-center justify-center gap-2 text-[13.5px] text-muted">
           <Loader2 size={16} className="animate-spin" /> Running requests…
@@ -98,9 +98,9 @@ export function RunnerView({ tab }: { tab: RunnerTab }) {
 
       {report && (
         <>
-          <div className="flex shrink-0 items-baseline gap-6 border-b border-border px-5 pb-4">
+          <div className="flex shrink-0 items-baseline gap-6 border-b border-border px-4 py-4">
             <div className="flex items-baseline gap-2.5">
-              <span className="text-[21px] font-semibold tracking-[-0.02em]">
+              <span className="text-[21px] leading-8 font-semibold tracking-[-0.02em]">
                 {report.succeeded} of {report.total} passed
               </span>
               {report.failed > 0 && <span className="text-[13px] text-danger">{report.failed} failed</span>}
@@ -114,7 +114,7 @@ export function RunnerView({ tab }: { tab: RunnerTab }) {
             {iterations > 1 && <span className="text-[13px] text-faint">{iterations} iterations</span>}
             <span className="text-[13px] text-faint">{formatDuration(report.durationMs)}</span>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto px-3 py-1.5">
+          <div className="min-h-0 flex-1 overflow-auto px-2 py-1.5">
             {report.items.map((item, i) => {
               const result = tab.run?.results[i];
               const expanded = open === i;
@@ -157,7 +157,7 @@ export function RunnerView({ tab }: { tab: RunnerTab }) {
                     </span>
                   </button>
                   {expanded && result && (
-                    <div className="space-y-2 pr-3 pb-3 pl-[70px] text-[13px]">
+                    <div className="space-y-2 pr-2 pb-3 pl-[66px] text-[13px]">
                       <div className="font-mono text-[12.5px] break-all text-muted">{item.url}</div>
                       {item.error && <div className="rounded-lg bg-danger-soft px-3 py-2 font-mono text-[12.5px] text-danger">{item.error}</div>}
                       {result.tests.map((t, j) => (

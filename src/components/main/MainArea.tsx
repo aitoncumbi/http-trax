@@ -1,9 +1,10 @@
 "use client";
 
 import { FileText, GitCompare, GitPullRequest, Play, Plus, Settings2, X } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 import { tabDirty, useStore, useWorkspaceTabs, type Tab } from "@/lib/store";
-import { cx } from "@/lib/util";
+import { cx, scrollSideways } from "@/lib/util";
 
 import { useContextMenu } from "../ui/Menu";
 import { DiffView } from "./DiffView";
@@ -40,6 +41,11 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
   const { focusTab, closeTab } = useStore.getState();
   const dirty = tabDirty(tab);
   const { icon, title, hint } = tabTitle(tab);
+  const ref = useRef<HTMLDivElement>(null);
+  // The strip scrolls without a scrollbar, so bring the active tab into view.
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active]);
   const ctx = useContextMenu(() => [
     { label: "Close", hint: "Ctrl+W", onSelect: () => void closeTab(tab.id) },
     {
@@ -53,6 +59,7 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
   ]);
   return (
     <div
+      ref={ref}
       role="tab"
       aria-selected={active}
       title={hint}
@@ -60,7 +67,7 @@ function TabButton({ tab, active }: { tab: Tab; active: boolean }) {
       onContextMenu={ctx.open}
       onClick={() => focusTab(tab.id)}
       className={cx(
-        "group -mb-px flex max-w-[240px] shrink-0 cursor-pointer items-center gap-2 border-b-2 pr-1.5 pl-3 text-[14px]",
+        "group flex max-w-[240px] shrink-0 cursor-pointer items-center gap-2 border-b-2 pr-1.5 pl-3 text-[14px]",
         active ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
       )}
     >
@@ -94,7 +101,7 @@ export function MainArea() {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {tabs.length > 0 && (
-        <div role="tablist" aria-label="Open tabs" className="flex h-9 shrink-0 items-stretch gap-0.5 overflow-x-auto border-b border-border px-1.5">
+        <div role="tablist" aria-label="Open tabs" onWheel={scrollSideways} className="tab-strip tab-scroll flex h-9 shrink-0 items-stretch gap-0.5 px-1">
           {tabs.map((t) => (
             <TabButton key={t.id} tab={t} active={t.id === active?.id} />
           ))}
