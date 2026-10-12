@@ -1432,6 +1432,110 @@ paths:
     }
 
     #[tokio::test]
+    async fn tests_generated_from_a_spec_pass_against_the_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::init(dir.path(), "Generated").unwrap();
+        let server = MockServer::start().await;
+        let pet = serde_json::json!({"id": 42, "name": "Rex"});
+        Mock::given(method("POST"))
+            .and(path("/pets"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(&pet))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/pets/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&pet))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/pets/42"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let spec = r#"
+openapi: 3.0.3
+info: { title: Pets }
+servers: [{ url: https://pets.example.com }]
+paths:
+  /pets:
+    post:
+      summary: Add a pet
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Pet' }
+      responses:
+        201:
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pet' }
+  /pets/{petId}:
+    parameters:
+      - { name: petId, in: path, required: true, schema: { type: integer } }
+    get:
+      summary: Get a pet
+      responses:
+        200:
+          description: The pet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pet' }
+    delete:
+      summary: Remove a pet
+      responses:
+        204: { description: Removed }
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+"#;
+        let options = crate::ImportOptions {
+            tests: true,
+            ..Default::default()
+        };
+        let imported = ws.import_with(spec, &options).unwrap();
+        let mut env = Environment::new("Local");
+        env.variables.push(Variable::new("baseUrl", server.uri()));
+        let env = ws.save_environment(&env).unwrap();
+        let collection = &imported.collections[0];
+
+        let (report, results) = run_group(&ws, collection, &opts(&env), false)
+            .await
+            .unwrap();
+        let urls: Vec<&str> = results.iter().map(|r| r.request.url.as_str()).collect();
+        // The id the POST created reaches the requests on /pets/{petId}.
+        assert!(urls[1].ends_with("/pets/42"), "{urls:?}");
+        assert!(urls[2].ends_with("/pets/42"), "{urls:?}");
+        // A status test and a contract test per request.
+        assert_eq!(
+            (report.tests_passed, report.tests_failed),
+            (6, 0),
+            "{results:#?}"
+        );
+
+        // An API that drifts from its spec fails them.
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/pets"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 42})))
+            .mount(&server)
+            .await;
+        let (_, results) = run_group(&ws, collection, &opts(&env), true).await.unwrap();
+        let failed: Vec<&str> = results[0]
+            .tests
+            .iter()
+            .filter(|t| !t.passed)
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(failed, ["status is 201", "contract: POST /pets"]);
+    }
+
+    #[tokio::test]
     async fn data_driven_iterations() {
         let (_dir, ws, server, meta, env) = setup().await;
         Mock::given(method("GET"))

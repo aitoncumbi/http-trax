@@ -373,7 +373,7 @@ fn find_operation<'a>(spec: &'a Value, method: &str, path: &str) -> Found<'a> {
 }
 
 /// Follow local `$ref`s (`#/components/responses/NotFound`).
-fn deref<'a>(spec: &'a Value, mut v: &'a Value) -> &'a Value {
+pub(crate) fn deref<'a>(spec: &'a Value, mut v: &'a Value) -> &'a Value {
     for _ in 0..32 {
         let Some(pointer) = v
             .get("$ref")
@@ -393,7 +393,7 @@ fn deref<'a>(spec: &'a Value, mut v: &'a Value) -> &'a Value {
 // ----------------------------------------------------------------- checks
 
 /// `application/json; charset=utf-8` → `application/json`.
-fn essence(content_type: &str) -> String {
+pub(crate) fn essence(content_type: &str) -> String {
     content_type
         .split(';')
         .next()
@@ -402,7 +402,7 @@ fn essence(content_type: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn is_json(content_type: &str) -> bool {
+pub(crate) fn is_json(content_type: &str) -> bool {
     content_type == "application/json" || content_type.ends_with("+json")
 }
 

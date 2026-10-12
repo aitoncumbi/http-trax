@@ -37,6 +37,8 @@ Typical loop after you build or change an HTTP service:
 3. `upsert_request` for each endpoint. Use {{variables}} in url/headers/body and put assertions \
    in `scripts.postResponse`, e.g. `trax.test('201', () => trax.expect(trax.response.status).toBe(201));`.
    Chain requests by saving values: `trax.env.set('userId', trax.response.json().id)`.
+   If the service has an OpenAPI spec, `import_spec` with `spec_path` and `generate_tests` does \
+   steps 2 and 3: requests, status tests and contract checks against the spec.
 4. `run_collection` (or `run_request`) and fix the service until every test passes.
 5. Optionally keep a known-good response with `run_request` + `save_response_as`.
 

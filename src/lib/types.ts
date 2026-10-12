@@ -612,6 +612,18 @@ export interface ImportSummary {
   environments: string[];
   requests: number;
   warnings: string[];
+  /** Spec the collection's contract checks use, when tests were generated. */
+  contract?: string | null;
+  /** Requests given a generated status test. */
+  tests: number;
+}
+
+/** OpenAPI imports only. */
+export interface ImportOptions {
+  /** Status test per request, contract checks against the spec, id chaining. */
+  tests: boolean;
+  /** The spec's file (absolute or relative to the workspace); "" saves a copy in specs/. */
+  specPath: string;
 }
 
 // ------------------------------------------------------------- export

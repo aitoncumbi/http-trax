@@ -20,6 +20,7 @@ import type {
   FileChanges,
   GroupNode,
   HistoryEntry,
+  ImportOptions,
   MergeOutcome,
   MergeSide,
   OnboardingSpec,
@@ -609,7 +610,7 @@ type Args = Record<string, unknown>;
 const s = (a: Args, k: string) => a[k] as string;
 
 /** A small subset of the Rust importer, enough for the browser preview. */
-function importSpecMock(w: MockWorkspace, raw: string) {
+function importSpecMock(w: MockWorkspace, raw: string, options: ImportOptions | null) {
   let v: Record<string, unknown>;
   try {
     v = JSON.parse(raw);
@@ -619,7 +620,7 @@ function importSpecMock(w: MockWorkspace, raw: string) {
     }
     throw new Error(`not valid JSON: ${(e as Error).message}`);
   }
-  const summary = { collections: [] as string[], environments: [] as string[], requests: 0, warnings: [] as string[] };
+  const summary = { collections: [] as string[], environments: [] as string[], requests: 0, warnings: [] as string[], contract: null as string | null, tests: 0 };
   type PmItem = { name?: string; item?: PmItem[]; request?: { method?: string; url?: string | { raw?: string } } | string };
   const toItems = (items: PmItem[]): MockItem[] =>
     items.map((it) => {
@@ -657,16 +658,32 @@ function importSpecMock(w: MockWorkspace, raw: string) {
     for (const [pathStr, pathObj] of Object.entries(paths)) {
       if (!pathObj || typeof pathObj !== "object") continue;
       for (const m of methods) {
-        const op = pathObj[m] as { summary?: string; operationId?: string } | undefined;
+        const op = pathObj[m] as { summary?: string; operationId?: string; responses?: Record<string, unknown> } | undefined;
         if (!op) continue;
         const name = op.summary || op.operationId || `${m.toUpperCase()} ${pathStr}`;
         const urlPath = pathStr.replace(/\{([^}]+)\}/g, "{{$1}}");
         const fullUrl = basePath.endsWith("/") && urlPath.startsWith("/") ? basePath + urlPath.slice(1) : basePath + urlPath;
         summary.requests++;
-        items.push(r(req(name, m.toUpperCase(), fullUrl)));
+        const codes = Object.keys(op.responses ?? {})
+          .map(Number)
+          .filter((c) => c >= 200 && c < 300)
+          .sort();
+        const status = "trax.expect(trax.response.status)";
+        const postResponse = !options?.tests || !codes.length
+          ? ""
+          : codes.length === 1
+            ? `trax.test("status is ${codes[0]}", () => ${status}.toBe(${codes[0]}));`
+            : `trax.test("status is one of ${codes.join(", ")}", () => ${status}.toBeOneOf([${codes.join(", ")}]));`;
+        if (postResponse) summary.tests++;
+        items.push(r(req(name, m.toUpperCase(), fullUrl, postResponse ? { scripts: { postResponse } } : {})));
       }
     }
-    const c = group(info.title || "OpenAPI Specification", items, { seq: w.collections.length + 1 });
+    const title = info.title || "OpenAPI Specification";
+    if (options?.tests) {
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "untitled";
+      summary.contract = options.specPath || `specs/${slug}.json`;
+    }
+    const c = group(title, items, { seq: w.collections.length + 1, ...(summary.contract ? { contract: { openapi: summary.contract } } : {}) });
     w.collections.push(c);
     summary.collections.push(c.meta.id);
   } else if (v.log && typeof v.log === "object" && Array.isArray((v.log as { entries?: unknown[] }).entries)) {
@@ -918,7 +935,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     env.shared = !!a.shared;
     return structuredClone(env);
   },
-  import_json: (a) => importSpecMock(ws(a.workspaceId), s(a, "json")),
+  import_json: (a) => importSpecMock(ws(a.workspaceId), s(a, "json"), (a.options as ImportOptions | null) ?? null),
   oauth_token_status: (a) => {
     const o = effectiveOAuth(ws(a.workspaceId), a.request as Request, (a.parentId as string | null) ?? null);
     const token = oauthTokens.get(oauthKey(s(a, "workspaceId"), o)) ?? null;

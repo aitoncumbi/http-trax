@@ -29,6 +29,7 @@ The app, installers (`Courion`), binaries (`courion`, `courion-mcp`, `courion-cl
 - **Data-driven runs.** Run a collection once per row of a CSV or JSON file, with the row's values as `{{variables}}` and in `trax.iterationData` (`pm.iterationData`), or a set number of times, with a delay between requests. In the app's runner, from the CLI (`--data rows.csv`) and for agents.
 - **Runs in CI.** The `trax` CLI runs collections in a pipeline with the same runner as the app, exits non-zero when a test fails, and writes JUnit, JSON and Markdown reports. Secrets come from the pipeline's environment and are masked in the output.
 - **Import from anywhere.** Import OpenAPI 3.x / Swagger specs (YAML or JSON), Postman collections (v2.0/v2.1) and environments with example responses, HAR archives, Insomnia exports, and Bruno collections; `pm.*` scripts keep working.
+- **Tests from your spec.** Importing an OpenAPI spec can also generate the tests: a status check on every request, contract checks against the spec for the whole collection, and ids that POSTs create passed on to the requests that use them, so the collection runs against your API straight away. Pick the spec's file and the checks follow it as it changes.
 
 ![Source control](docs/screenshots/source-control.png)
 
@@ -67,7 +68,7 @@ Leave out `--workspace` to use whichever workspace is active in the app. The age
 | `upsert_collection` | Collection-level variables, headers, auth and scripts |
 | `upsert_request` | Add or update a request, including test scripts |
 | `move_item` | Move or reorder a request, folder, or collection |
-| `import_spec` | Import an OpenAPI, Postman, HAR, Insomnia, or Bruno spec/export into the workspace |
+| `import_spec` | Import an OpenAPI, Postman, HAR, Insomnia, or Bruno spec/export into the workspace; for OpenAPI, `generate_tests` adds status tests and contract checks |
 | `run_request` / `run_collection` | Run and report status, tests, console output and body; collections can run once per data row, a set number of times, with a delay |
 | `send_http_request` | One-off request that isn't saved |
 | `list_history` / `restore_history_entry` | Search recent run history or restore a history run as a saved request |
@@ -172,6 +173,8 @@ contract:
 ```
 
 A request can override it with `contract: { schema: schemas/order.json }` or turn it off with `contract: { off: true }`.
+
+Importing the spec with **Generate tests** (or `import_spec` with `generate_tests` for agents) sets this up for you and writes a status test into every request.
 
 See [DESIGN.md](DESIGN.md) for why it looks like this.
 
