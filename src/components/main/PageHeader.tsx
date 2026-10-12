@@ -19,7 +19,7 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex shrink-0 items-end gap-2.5 px-5 pt-4 pb-3.5">
+    <div className="flex shrink-0 items-end gap-2.5 px-4 pt-4 pb-3.5">
       <div className="min-w-0 flex-1">
         <div className="eyebrow mb-1">{eyebrow}</div>
         {onTitle ? (

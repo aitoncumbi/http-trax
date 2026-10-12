@@ -55,7 +55,7 @@ function HeaderRows({ headers, dense }: { headers: { key: string; value: string 
 
 function RequestSummary({ req }: { req: SentRequest }) {
   return (
-    <div className="px-5 py-4">
+    <div className="px-4 py-4">
       <div className="font-mono text-[13px] break-all">
         <span className={cx("font-semibold", methodColor(req.method))}>{req.method}</span> {req.url}
       </div>
@@ -81,6 +81,7 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       className="btn-ghost h-[26px]"
       title="Copy body"
+      aria-label="Copy body"
       onClick={() => {
         void navigator.clipboard?.writeText(text);
         setDone(true);
@@ -88,7 +89,8 @@ function CopyButton({ text }: { text: string }) {
       }}
     >
       {done ? <Check size={14} strokeWidth={1.6} /> : <Copy size={14} strokeWidth={1.4} />}
-      {done ? "Copied" : "Copy"}
+      {/* Icon only when the pane is narrow (response beside the request). */}
+      <span className="hidden @sm:inline">{done ? "Copied" : "Copy"}</span>
     </button>
   );
 }
@@ -99,7 +101,7 @@ const PREVIEW_HEAD =
 
 function HtmlPreview({ html, url }: { html: string; url: string }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 px-5 pt-2 pb-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 pt-2 pb-4">
       <div className="flex min-h-[160px] flex-1 flex-col overflow-hidden rounded-[10px] border border-border-mid">
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border-mid bg-sunken px-3">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-faint" aria-hidden>
@@ -274,7 +276,7 @@ function BodyView({ response }: { response: ResponseData }) {
   if (response.bodyBase64) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center gap-2.5 px-5 pt-2.5 pb-1">
+        <div className="flex shrink-0 items-center gap-2.5 px-4 pt-2.5 pb-1">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">
             {ct || "Binary"} · {formatSize(response.size)}
           </span>
@@ -307,8 +309,8 @@ function BodyView({ response }: { response: ResponseData }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2.5 px-5 pt-2.5 pb-1">
+    <div className="@container flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-2.5 px-4 pt-2.5 pb-1">
         <Pills<"pretty" | "raw" | "preview">
           options={[
             { id: "pretty", label: "Pretty" },
@@ -343,7 +345,7 @@ function BodyView({ response }: { response: ResponseData }) {
         </div>
       </div>
       {filter !== null && (
-        <div className="flex shrink-0 items-center gap-2.5 px-5 pt-1 pb-1.5">
+        <div className="flex shrink-0 items-center gap-2.5 px-4 pt-1 pb-1.5">
           <Pills<QueryLang>
             options={[
               { id: "jsonpath", label: "JSONPath" },
@@ -388,7 +390,7 @@ function BodyView({ response }: { response: ResponseData }) {
         </div>
       )}
       {large && mode !== "preview" && (
-        <div className="mx-5 mb-1 rounded-lg bg-warn/10 px-3 py-1.5 text-[12.5px] text-warn">
+        <div className="mx-4 mb-1 rounded-lg bg-warn/10 px-3 py-1.5 text-[12.5px] text-warn">
           Large response ({formatSize(response.size)}): virtualized rendering is active; formatting and highlighting are off.
         </div>
       )}
@@ -430,7 +432,7 @@ function CookiesView({ response, sent }: { response: ResponseData | null | undef
     );
   }
   return (
-    <div className="px-5 py-4">
+    <div className="px-4 py-4">
       {set.length > 0 && (
         <section className="mb-6">
           <div className="mb-2 flex items-center justify-between">
@@ -500,9 +502,11 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
   const logs = saved ? [] : (result?.logs ?? []);
   const scriptErrors = saved ? [] : (result?.scriptErrors ?? []);
   const canSave = !saved && !!result?.response;
+  // Beside the request, the header lines up with the request's tab strip.
+  const side = useStore((s) => s.layout) === "side";
 
   const header = (
-    <div className="flex h-[34px] shrink-0 items-center justify-between gap-3 pr-2.5 pl-4">
+    <div className={cx("flex h-9 shrink-0 items-center justify-between gap-3 px-4", side && "tab-strip")}>
       <div className="flex min-w-0 items-center gap-4 overflow-hidden whitespace-nowrap">
         <span className="eyebrow">{saved ? "SAVED RESPONSE" : "RESPONSE"}</span>
         {tab.running && (
@@ -558,7 +562,6 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
       label="Response sections"
       value={section}
       onChange={setSection}
-      className="px-1"
       tabs={[
         { id: "body", label: "Body" },
         { id: "headers", label: "Headers", badge: response?.headers.length },
@@ -613,7 +616,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
           ) : tab.running ? (
             <Empty title="Waiting for the server…" />
           ) : (
-            <div className="space-y-2 px-5 py-4">
+            <div className="space-y-2 px-4 py-4">
               {result?.error && <p className="rounded-lg bg-danger-soft p-3 font-mono text-[12.5px] text-danger">{result.error}</p>}
               {scriptErrors.map((e, i) => (
                 <p key={i} className="rounded-lg bg-danger-soft p-3 font-mono text-[12.5px] text-danger">
@@ -635,7 +638,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
           (tests.length === 0 ? (
             <Empty title="No tests" text="Write them under Scripts → Post-response with trax.test()." />
           ) : (
-            <div className="px-5 py-4">
+            <div className="px-4 py-4">
               <div className="mb-2.5 flex items-baseline gap-2.5">
                 <span className="text-[21px] font-semibold tracking-[-0.02em]">
                   {passed} of {tests.length} passed
@@ -665,7 +668,7 @@ export function ResponseViewer({ tab }: { tab: RequestTab }) {
           (logs.length === 0 && scriptErrors.length === 0 ? (
             <Empty title="Nothing logged" text="console.log() output from pre-request and post-response scripts shows up here." />
           ) : (
-            <div className="px-5 py-2 font-mono text-[13px]">
+            <div className="px-4 py-2 font-mono text-[13px]">
               {scriptErrors.map((e, i) => (
                 <div key={`e${i}`} className="flex min-h-[38px] items-center gap-3 border-b border-border-soft py-1.5">
                   <span className="rounded bg-danger/15 px-1.5 py-px text-[11px] text-danger">error</span>

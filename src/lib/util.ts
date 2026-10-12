@@ -6,6 +6,12 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 
 export const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
 
+/** Wheel handler for a sideways-scrolling tab strip: a vertical wheel scrolls it too. */
+export function scrollSideways(e: { currentTarget: HTMLElement; deltaX: number; deltaY: number }): void {
+  const el = e.currentTarget;
+  if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY;
+}
+
 /** Text colour class for an HTTP method badge. */
 export function methodColor(method: string): string {
   switch (method.toUpperCase()) {

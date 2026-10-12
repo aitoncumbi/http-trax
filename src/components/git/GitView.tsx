@@ -381,7 +381,7 @@ export function GitMain() {
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <section aria-label="Review changes" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3">
+        <div className="tab-strip flex h-9 shrink-0 items-center gap-1.5 px-3">
           <button
             type="button"
             aria-haspopup="menu"

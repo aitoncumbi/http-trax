@@ -41,10 +41,10 @@ export function GroupEditor({ tab }: { tab: GroupTab }) {
         </button>
         <SaveButton dirty={dirty} onSave={() => void saveTab(tab.id)} />
       </PageHeader>
-      <TabStrip<Section> label="Sections" tabs={sections} value={section} onChange={setSection} className="px-2" />
+      <TabStrip<Section> label="Sections" tabs={sections} value={section} onChange={setSection} />
       <div className="min-h-0 flex-1 overflow-auto">
         {section === "overview" && (
-          <div className="max-w-[720px] px-5 py-4">
+          <div className="max-w-[720px] px-4 py-4">
             <label htmlFor="group-description" className="label">
               Description
             </label>
@@ -80,7 +80,7 @@ export function GroupEditor({ tab }: { tab: GroupTab }) {
           />
         )}
         {section === "contract" && (
-          <div className="max-w-[720px] px-5 py-4">
+          <div className="max-w-[720px] px-4 py-4">
             <label htmlFor="group-openapi" className="label">
               OpenAPI document
             </label>

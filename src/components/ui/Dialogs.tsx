@@ -222,13 +222,13 @@ function WorkspaceDialog({ mode: initialMode }: { mode: WorkspaceDialogMode }) {
 
   return (
     <Modal title="Workspaces" onClose={close} width={560}>
-      <div className="flex gap-1 border-b border-border px-4">
+      <div className="tab-strip flex gap-1 px-2">
         {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setMode(t.id)}
             className={cx(
-              "-mb-px flex h-10 items-center gap-1.5 border-b-2 px-3 text-[13px]",
+              "flex h-10 items-center gap-1.5 border-b-2 px-3 text-[13px]",
               mode === t.id ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
             )}
           >

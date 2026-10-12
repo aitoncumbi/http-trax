@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 
-import { cx } from "@/lib/util";
+import { cx, scrollSideways } from "@/lib/util";
 
 export interface SegmentedTab<T extends string> {
   id: T;
@@ -14,7 +14,7 @@ export interface SegmentedTab<T extends string> {
 
 const TONES = { ok: "text-ok", danger: "text-danger", accent: "text-accent-text" } as const;
 
-/** Underlined tab strip (36px) used in editors and viewers. */
+/** Underlined tab strip (36px) used in editors and viewers. Labels start at the 16px content inset. */
 export function TabStrip<T extends string>({
   tabs,
   value,
@@ -31,8 +31,8 @@ export function TabStrip<T extends string>({
   label?: string;
 }) {
   return (
-    <div className={cx("flex h-9 shrink-0 items-stretch justify-between gap-3 border-b border-border", className)}>
-      <div role="tablist" aria-label={label} className="flex min-w-0 items-stretch gap-0.5 overflow-x-auto px-2">
+    <div className={cx("tab-strip flex h-9 shrink-0 items-stretch justify-between gap-3", className)}>
+      <div role="tablist" aria-label={label} onWheel={scrollSideways} className="tab-scroll flex min-w-0 items-stretch px-1">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -41,7 +41,7 @@ export function TabStrip<T extends string>({
             aria-selected={value === t.id}
             onClick={() => onChange(t.id)}
             className={cx(
-              "-mb-px inline-flex items-center gap-1.5 border-b-2 px-[11px] text-[13px] whitespace-nowrap transition-colors",
+              "inline-flex items-center gap-1.5 border-b-2 px-3 text-[13px] whitespace-nowrap transition-colors",
               value === t.id ? "border-accent-line font-medium text-text" : "border-transparent text-muted hover:text-text",
             )}
           >
@@ -52,7 +52,7 @@ export function TabStrip<T extends string>({
           </button>
         ))}
       </div>
-      {right && <div className="flex shrink-0 items-center gap-1 pr-3">{right}</div>}
+      {right && <div className="flex shrink-0 items-center gap-1 pr-4">{right}</div>}
     </div>
   );
 }

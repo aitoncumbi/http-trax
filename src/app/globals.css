@@ -191,10 +191,19 @@
     background: var(--frame);
     color: var(--text);
     font-family: var(--font-sans);
-    font-size: 13.5px;
     letter-spacing: -0.005em;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
+  }
+
+  /*
+   * The text size goes on body only: the root keeps the browser's 16px so
+   * spacing, sizes and radii (h-9 = 36px) land on whole pixels. A smaller
+   * root scaled them to fractions (h-9 = 30.375px), which put borders
+   * between pixels and gave tab strips a 1px overflow.
+   */
+  body {
+    font-size: 13.5px;
   }
 
   * {
@@ -261,7 +270,7 @@
     @apply mb-1.5 block text-[13px] text-faint;
   }
   .eyebrow {
-    @apply text-[11.5px] font-semibold tracking-[0.06em] text-faint uppercase;
+    @apply text-[11.5px] leading-4 font-semibold tracking-[0.06em] text-faint uppercase;
   }
   .kbd {
     @apply rounded-[5px] bg-selected px-[7px] py-[3px] font-mono text-[10.5px] leading-none tracking-normal text-muted;
@@ -277,6 +286,34 @@
   }
   .segmented > button[aria-pressed="true"] {
     @apply bg-selected text-text;
+  }
+  /*
+   * Underlined tab strips draw their bottom line as an inset shadow, so the
+   * active tab's 2px underline covers it from inside the strip. (A border
+   * plus a -1px margin on the tab made the strip overflow by a pixel and
+   * show a scrollbar.) Set --tab-line for a softer line.
+   */
+  .tab-strip {
+    box-shadow: inset 0 -1px 0 var(--tab-line, var(--border));
+  }
+  /* Tabs that don't fit scroll sideways, without a scrollbar. */
+  .tab-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .tab-scroll::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* The request/response split, at --split; whole pixels where round() works. */
+.split-pane {
+  flex: 0 0 var(--split);
+}
+@supports (width: round(down, 50%, 1px)) {
+  .split-pane {
+    flex-basis: round(down, var(--split), 1px);
   }
 }
 

@@ -155,6 +155,7 @@ export function EnvironmentView() {
             </span>
             <input
               aria-label="Environment name"
+              size={1}
               value={draft.name}
               onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
               className="col-start-1 row-start-1 w-full min-w-[3ch] rounded-md bg-transparent px-1 outline-none hover:bg-hover focus:bg-panel-2"

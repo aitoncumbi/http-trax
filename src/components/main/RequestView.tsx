@@ -168,7 +168,7 @@ export function RequestView({ tab }: { tab: RequestTab }) {
       <RequestComments workspaceId={tab.workspaceId} requestId={tab.requestId} />
 
       {/* breadcrumb */}
-      <div className="flex shrink-0 items-center gap-2.5 overflow-hidden px-4 pt-2.5 pb-2 text-[13px] whitespace-nowrap text-muted">
+      <div className="flex shrink-0 items-center gap-2.5 overflow-hidden px-4 pt-2.5 pb-2 text-[13px] leading-5 whitespace-nowrap text-muted">
         {chain.map((g) => (
           <span key={g.meta.id} className="flex shrink-0 items-center gap-2.5">
             <span>{g.meta.name}</span>
@@ -250,7 +250,7 @@ export function RequestView({ tab }: { tab: RequestTab }) {
 
       {/* panes */}
       <div ref={container} className={cx("flex min-h-0 flex-1 border-t border-border", side ? "flex-row" : "flex-col")}>
-        <section aria-label="Request" className="flex min-h-0 min-w-0 flex-col" style={{ flex: `0 0 ${ratio * 100}%` }}>
+        <section aria-label="Request" className="split-pane flex min-h-0 min-w-0 flex-col" style={{ "--split": `${ratio * 100}%` } as React.CSSProperties}>
           <TabStrip<Section>
             label="Request sections"
             value={section}
@@ -300,7 +300,7 @@ export function RequestView({ tab }: { tab: RequestTab }) {
               />
             )}
             {section === "settings" && (
-              <div className="px-5 py-2">
+              <div className="px-4 py-2">
                 {[
                   {
                     label: "Follow redirects",
