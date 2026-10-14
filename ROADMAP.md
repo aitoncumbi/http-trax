@@ -122,6 +122,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 - [ ] Code signing for Windows installers
 - [ ] Auto-updates (`tauri-plugin-updater`)
 - [ ] Plugin system for auth providers, importers and script libraries
+- [ ] Inline function calls for headers / body (Instead of setting body variables in scripts we can call a function such as uuid.v4 directly on the body to generate a UUID)
 
 ## How we work through this
 
