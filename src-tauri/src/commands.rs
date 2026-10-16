@@ -531,12 +531,18 @@ pub async fn clear_cookies(
 pub async fn import_json(
     state: State<'_, AppState>,
     workspace_id: String,
-    json: String,
+    json: Option<String>,
+    path: Option<String>,
     options: Option<ImportOptions>,
 ) -> CmdResult<ImportSummary> {
     let ws = state.workspace(&workspace_id)?;
     let options = options.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || ws.import_with(&json, &options))
+    let text = match (json, path) {
+        (Some(j), _) => j,
+        (None, Some(p)) => tokio::fs::read_to_string(&p).await.str_err()?,
+        (None, None) => return Err("either json or path must be provided".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || ws.import_with(&text, &options))
         .await
         .str_err()?
         .str_err()
@@ -552,7 +558,12 @@ pub async fn read_import_file(path: String) -> CmdResult<String> {
     if !matches!(ext.as_str(), "json" | "yaml" | "yml" | "har") {
         return Err("only .json, .yaml, .yml and .har files can be imported".into());
     }
-    tokio::fs::read_to_string(&path).await.str_err()
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(&path).await.str_err()?;
+    let mut buffer = Vec::new();
+    file.take(1024 * 1024).read_to_end(&mut buffer).await.str_err()?;
+    let text = String::from_utf8_lossy(&buffer).into_owned();
+    Ok(text)
 }
 
 /// Set (Some) or clear (None) a local override ("current value").

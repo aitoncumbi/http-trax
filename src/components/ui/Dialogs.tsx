@@ -443,7 +443,7 @@ function groupOptions(collections: GroupNode[]): { id: string; label: string }[]
 
 /** An OpenAPI or Swagger document, JSON or YAML. */
 function isOpenApi(text: string): boolean {
-  return /(^|[{,])\s*["']?(openapi|swagger)["']?\s*:/m.test(text);
+  return /(^|[{,])\s*["']?(openapi|swagger)["']?\s*:/m.test(text.slice(0, 1024 * 1024));
 }
 
 function SpecImport({ close }: { close: () => void }) {
@@ -471,11 +471,12 @@ function SpecImport({ close }: { close: () => void }) {
       className="space-y-4 p-5"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (!workspaceId || !text.trim()) return;
+        if (!workspaceId || (!text.trim() && !filePath)) return;
         setBusy(true);
         setError(null);
         try {
-          const summary = await api.importJson(workspaceId, text, openapi ? { tests, specPath: filePath ?? "" } : undefined);
+          const payloadText = filePath ? null : text;
+          const summary = await api.importJson(workspaceId, payloadText, filePath, openapi ? { tests, specPath: filePath ?? "" } : undefined);
           await reloadTree();
           bumpGit();
           close();
@@ -538,14 +539,18 @@ function SpecImport({ close }: { close: () => void }) {
         </label>
         <textarea
           id="spec-content"
-          value={text}
+          value={text.length >= 1024 * 1024 && filePath ? "" : text}
           onChange={(e) => {
             setText(e.target.value);
             setFile(null);
             setFilePath(null);
           }}
           spellCheck={false}
-          placeholder='{"openapi": "3.0.0", ...} or {"info": {"name": "Orders API"}, "item": [...]}'
+          placeholder={
+            text.length >= 1024 * 1024 && filePath
+              ? "File is too large to display. Importing will work, or you can paste to replace it."
+              : '{"openapi": "3.0.0", ...} or {"info": {"name": "Orders API"}, "item": [...]}'
+          }
           className="input h-28 resize-none py-2.5 font-mono text-[12.5px] leading-[19px]"
         />
       </div>
