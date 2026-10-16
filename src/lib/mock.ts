@@ -1649,6 +1649,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
   git_sparse_checkout_disable: () => void (mockSparse = { enabled: false, cone: true, patterns: [] }),
   git_signing_settings: (): SigningSettings => structuredClone(mockSigning),
   git_set_signing_settings: (a) => void (mockSigning = structuredClone(a.settings as SigningSettings)),
+  set_mcp_port: (a) => {},
 };
 
 const MOCK_TEMPLATES: WorkspaceTemplate[] = [

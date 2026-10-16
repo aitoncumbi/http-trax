@@ -11,6 +11,7 @@ interface AgentsState {
   setClient: (id: AgentClient["id"]) => void;
   load: (workspaceId: string | null) => Promise<void>;
   setPermission: (key: keyof AgentPermissions, on: boolean) => Promise<void>;
+  setMcpPort: (port: number | null) => Promise<void>;
 }
 
 /** What the AI agents view shows; shared by its sidebar list and main card. */
@@ -22,6 +23,18 @@ export const useAgents = create<AgentsState>((set, get) => ({
     try {
       set({ overview: await api.agentOverview(workspaceId) });
     } catch (e) {
+      useStore.getState().toast("error", errorMessage(e));
+    }
+  },
+  setMcpPort: async (port) => {
+    const current = get().overview;
+    if (!current) return;
+    set({ overview: { ...current, mcpPort: port ?? undefined } });
+    try {
+      await api.setMcpPort(port);
+      await get().load(null);
+    } catch (e) {
+      set({ overview: current });
       useStore.getState().toast("error", errorMessage(e));
     }
   },

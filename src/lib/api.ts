@@ -208,6 +208,7 @@ export const api = {
   // agents
   agentOverview: (workspaceId: string | null) => call<AgentOverview>("agent_overview", { workspaceId }),
   setAgentPermissions: (permissions: AgentPermissions) => call<AgentPermissions>("set_agent_permissions", { permissions }),
+  setMcpPort: (port: number | null) => call<void>("set_mcp_port", { port }),
   workspaceSummaries: () => call<WorkspaceSummary[]>("workspace_summaries"),
 
   // history
