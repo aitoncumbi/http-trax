@@ -1,0 +1,47 @@
+name: Rust
+
+# Runs on pull requests that touch the headless crates (core, script, git,
+# MCP server, CLI). Windows runners bill at twice the Linux rate, but the
+# keychain, paths and process code differ there, so both stay.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  rust:
+    name: Rust core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: core
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      # The workspace's default members are the headless crates; the Tauri
+      # app is checked in app.yml.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test

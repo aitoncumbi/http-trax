@@ -1,0 +1,47 @@
+name: Desktop app
+
+# Checks that the Tauri app compiles and passes clippy, on Linux only and
+# without bundling. Installers are built by release.yml on a version tag.
+on:
+  pull_request:
+    paths:
+      - "src-tauri/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  app:
+    name: Desktop app (clippy)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: app-check
+      # Tauri's build script wants the exported frontend and the bundled
+      # sidecars to exist. Their contents don't matter for a compile check.
+      - name: Placeholder build inputs
+        run: |
+          mkdir -p out src-tauri/binaries
+          echo '<!doctype html>' > out/index.html
+          touch src-tauri/binaries/courion-mcp-x86_64-unknown-linux-gnu src-tauri/binaries/trax-mcp-x86_64-unknown-linux-gnu
+      - name: Clippy
+        run: cargo clippy -p http-trax --all-targets -- -D warnings

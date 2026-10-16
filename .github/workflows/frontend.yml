@@ -1,0 +1,39 @@
+name: Frontend
+
+# Runs on pull requests that touch the UI. Installers are only built by
+# release.yml (on a version tag): building them on every change cost about
+# 80 billed minutes per run.
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "next.config.ts"
+      - "tsconfig.json"
+      - "eslint.config.mjs"
+      - "postcss.config.mjs"
+      - "vitest.config.ts"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
