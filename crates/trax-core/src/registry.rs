@@ -95,6 +95,8 @@ pub struct RegistryData {
     /// What AI agents connected through MCP may do (all workspaces).
     #[serde(default)]
     pub agent_permissions: AgentPermissions,
+    #[serde(default)]
+    pub mcp_port: Option<u16>,
 }
 
 #[derive(Debug, Clone)]

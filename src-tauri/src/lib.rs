@@ -1,8 +1,10 @@
 //! http-trax desktop app (Tauri 2).
 
+use tauri::Manager;
 mod agent_commands;
 mod commands;
 mod git_commands;
+mod mcp_server;
 mod oauth_commands;
 mod state;
 mod sync;
@@ -25,12 +27,23 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             watch::refresh(&handle);
-            sync::start(handle);
+            sync::start(handle.clone());
+
+            let state = app.state::<AppState>();
+            if let Ok(reg) = state.registry() {
+                if let Some(port) = reg.data.mcp_port {
+                    if port > 0 {
+                        state.mcp_server.start(port, handle);
+                    }
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             agent_commands::agent_overview,
             agent_commands::set_agent_permissions,
+            agent_commands::set_mcp_port,
             agent_commands::workspace_summaries,
             commands::set_environment_shared,
             commands::import_json,

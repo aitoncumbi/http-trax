@@ -300,3 +300,26 @@ mod tests {
         assert_eq!(o.sessions.len(), 1);
     }
 }
+
+#[tauri::command]
+pub async fn set_mcp_port(
+    state: tauri::State<'_, crate::state::AppState>,
+    port: Option<u16>,
+    handle: tauri::AppHandle,
+) -> crate::state::CmdResult<()> {
+    state.update_registry(|reg| {
+        reg.data.mcp_port = port;
+        Ok(())
+    })?;
+
+    if let Some(p) = port {
+        if p > 0 {
+            state.mcp_server.start(p, handle);
+        } else {
+            state.mcp_server.stop();
+        }
+    } else {
+        state.mcp_server.stop();
+    }
+    Ok(())
+}
