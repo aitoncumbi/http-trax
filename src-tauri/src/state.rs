@@ -25,11 +25,14 @@ impl<T, E: std::fmt::Display> OrString<T> for Result<T, E> {
     }
 }
 
+use crate::mcp_server::McpServerManager;
+
 pub struct AppState {
     pub home: PathBuf,
     pub sync_reports: Mutex<HashMap<String, SyncReport>>,
     pub sync_in_flight: Mutex<HashSet<String>>,
     pub watchers: Mutex<HashMap<String, RecommendedWatcher>>,
+    pub mcp_server: McpServerManager,
 }
 
 impl AppState {
@@ -39,6 +42,7 @@ impl AppState {
             sync_reports: Mutex::default(),
             sync_in_flight: Mutex::default(),
             watchers: Mutex::default(),
+            mcp_server: McpServerManager::new(),
         }
     }
 

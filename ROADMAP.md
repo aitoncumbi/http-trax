@@ -106,7 +106,7 @@ We're building this in phases. Each phase should leave the app shippable. Checke
 ## Phase 3 — Automation and AI
 
 - [x] `trax` CLI (`courion-cli`): run collections in CI with JUnit, JSON and Markdown reports and a non-zero exit on failures; secrets from the environment, masked in output
-- [ ] MCP over Streamable HTTP served by the running app, so agents can drive the live UI (open a request, show a result)
+- [x] MCP over Streamable HTTP served by the running app, so agents can drive the live UI (open a request, show a result)
 - [ ] MCP resources (collections, requests, environments) and prompts ("write tests for this endpoint")
 - [x] Generate requests and tests from an OpenAPI spec: a status test per request, contract checks against the spec, ids passed from POSTs to the `/{id}` requests; `import_spec` with `generate_tests` for agents (in place of a separate `import_openapi` tool)
 - [x] Contract checks: validate responses against OpenAPI 3.x / Swagger 2.0 (path, method, status, content type, required headers, body schema) or a JSON Schema file, set per collection, folder or request and reported as a test
