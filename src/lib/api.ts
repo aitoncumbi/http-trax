@@ -201,8 +201,8 @@ export const api = {
   // environments: git and protection
   setEnvironmentShared: (workspaceId: string, id: string, shared: boolean) =>
     call<EnvironmentView>("set_environment_shared", { workspaceId, id, shared }),
-  importJson: (workspaceId: string, json: string, options?: ImportOptions) =>
-    call<ImportSummary>("import_json", { workspaceId, json, options: options ?? null }),
+  importJson: (workspaceId: string, json: string | null, path?: string | null, options?: ImportOptions) =>
+    call<ImportSummary>("import_json", { workspaceId, json, path, options: options ?? null }),
   readImportFile: (path: string) => call<string>("read_import_file", { path }),
 
   // agents
