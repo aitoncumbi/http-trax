@@ -4,11 +4,11 @@ use tauri::Manager;
 mod agent_commands;
 mod commands;
 mod git_commands;
+mod mcp_server;
 mod oauth_commands;
 mod state;
 mod sync;
 mod watch;
-mod mcp_server;
 
 use state::AppState;
 

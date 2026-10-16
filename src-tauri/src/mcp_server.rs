@@ -1,20 +1,20 @@
-use std::sync::Arc;
-use std::sync::Mutex;
-use tauri::AppHandle;
-use tokio::sync::oneshot;
-use tokio::sync::mpsc;
-use trax_mcp::Server;
-use trax_mcp::Config;
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     response::sse::{Event, Sse},
     routing::{get, post},
     Router,
 };
 use futures_util::stream::Stream;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use std::convert::Infallible;
 use serde_json::Value;
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tauri::AppHandle;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use trax_mcp::Config;
+use trax_mcp::Server;
 
 pub struct McpServerManager {
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
@@ -36,12 +36,16 @@ impl McpServerManager {
         tokio::spawn(async move {
             let config = Config::default();
             let server = Server::new(config);
-            let (msg_tx, _msg_rx) = mpsc::unbounded_channel::<Value>();
+            // Channel to broadcast messages to all connected SSE clients
+            let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
 
             let app = Router::new()
                 .route("/sse", get(sse_handler))
                 .route("/message", post(message_handler))
-                .with_state(Arc::new(HttpState { server: server.clone(), _tx: msg_tx }));
+                .with_state(Arc::new(HttpState {
+                    server: server.clone(),
+                    broadcast_tx,
+                }));
 
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
             let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -63,20 +67,32 @@ impl McpServerManager {
 
 pub struct HttpState {
     pub server: Arc<Server>,
-    pub _tx: mpsc::UnboundedSender<Value>,
+    pub broadcast_tx: tokio::sync::broadcast::Sender<Value>,
 }
 
 async fn sse_handler(
-    State(_state): State<Arc<HttpState>>,
+    State(state): State<Arc<HttpState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
+    let mut broadcast_rx = state.broadcast_tx.subscribe();
 
+    // Task to forward broadcasted messages to this specific client
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
-            tick.tick().await;
-            if tx.send(Ok(Event::default().event("ping").data(""))).is_err() {
-                break;
+            tokio::select! {
+                _ = tick.tick() => {
+                    if tx.send(Ok(Event::default().event("ping").data(""))).is_err() {
+                        break;
+                    }
+                }
+                Ok(msg) = broadcast_rx.recv() => {
+                    let event = Event::default().event("message").data(msg.to_string());
+                    if tx.send(Ok(event)).is_err() {
+                        break;
+                    }
+                }
+                else => break,
             }
         }
     });
@@ -84,14 +100,13 @@ async fn sse_handler(
     Sse::new(UnboundedReceiverStream::new(rx))
 }
 
-async fn message_handler(
-    State(state): State<Arc<HttpState>>,
-    Json(message): Json<Value>,
-) {
+async fn message_handler(State(state): State<Arc<HttpState>>, Json(message): Json<Value>) {
     let server = state.server.clone();
+    let broadcast_tx = state.broadcast_tx.clone();
+
     tokio::spawn(async move {
-        if let Some(_response) = server.handle(message).await {
-            // Processing response
+        if let Some(response) = server.handle(message).await {
+            let _ = broadcast_tx.send(response);
         }
     });
 }

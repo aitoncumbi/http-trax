@@ -307,8 +307,6 @@ pub async fn set_mcp_port(
     port: Option<u16>,
     handle: tauri::AppHandle,
 ) -> crate::state::CmdResult<()> {
-
-
     state.update_registry(|reg| {
         reg.data.mcp_port = port;
         Ok(())

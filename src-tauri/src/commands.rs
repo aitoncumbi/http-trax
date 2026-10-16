@@ -561,7 +561,10 @@ pub async fn read_import_file(path: String) -> CmdResult<String> {
     use tokio::io::AsyncReadExt;
     let file = tokio::fs::File::open(&path).await.str_err()?;
     let mut buffer = Vec::new();
-    file.take(1024 * 1024).read_to_end(&mut buffer).await.str_err()?;
+    file.take(1024 * 1024)
+        .read_to_end(&mut buffer)
+        .await
+        .str_err()?;
     let text = String::from_utf8_lossy(&buffer).into_owned();
     Ok(text)
 }
