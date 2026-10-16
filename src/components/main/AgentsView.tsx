@@ -111,7 +111,7 @@ export function AgentsView() {
   const setView = useStore((s) => s.setView);
   const overview = useAgents((s) => s.overview);
   const client = useAgents((s) => s.client);
-  const { setClient, setPermission, load } = useAgents.getState();
+  const { setClient, setPermission, load, setMcpPort } = useAgents.getState();
 
   // Sessions refresh every 30s on the server side; poll a little faster while visible.
   useEffect(() => {
@@ -222,6 +222,32 @@ export function AgentsView() {
               {t}
             </span>
           ))}
+        </div>
+
+        <Heading>HTTP Server</Heading>
+        <div className="mt-2.5 mb-6 flex items-center gap-4">
+          <div>
+            <label htmlFor="mcp-port" className="block text-[13px] font-medium text-text">Port (0 for dynamic)</label>
+            <input
+              id="mcp-port"
+              type="number"
+              min="0"
+              max="65535"
+              value={overview?.mcpPort ?? ""}
+              onChange={(e) => void setMcpPort(e.target.value ? parseInt(e.target.value, 10) : null)}
+              className="mt-1 w-32 rounded-md border border-border bg-sunken px-2.5 py-1.5 text-[13.5px] text-text outline-none focus:border-accent"
+              placeholder="Off"
+            />
+          </div>
+          {overview?.mcpUrl && (
+            <div className="flex-1 min-w-0">
+              <span className="block text-[13px] font-medium text-text">Connection URL (SSE)</span>
+              <div className="mt-1 flex items-center gap-2 overflow-hidden rounded-md border border-border-mid bg-sunken px-2.5 py-1.5">
+                <span className="truncate font-mono text-[13px] text-text">{overview.mcpUrl}</span>
+                <CopyButton text={overview.mcpUrl} />
+              </div>
+            </div>
+          )}
         </div>
 
         <Heading>What agents can do</Heading>

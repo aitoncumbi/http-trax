@@ -592,6 +592,8 @@ export interface AgentActivity {
 
 export interface AgentOverview {
   permissions: AgentPermissions;
+  mcpPort?: number;
+  mcpUrl?: string;
   clients: AgentClient[];
   sessions: AgentSession[];
   activity: AgentActivity[];
