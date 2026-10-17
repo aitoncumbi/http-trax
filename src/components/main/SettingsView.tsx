@@ -14,7 +14,7 @@ import {
   useShortcuts,
 } from "@/lib/shortcuts";
 import { useStore } from "@/lib/store";
-import type { Identity, Remote, SyncSettings, Variable, WorkspaceManifest } from "@/lib/types";
+import type { Identity, Remote, SyncSettings, Variable, WorkspaceManifest, WorkspaceEntry } from "@/lib/types";
 import { cx } from "@/lib/util";
 
 import { KeyValueEditor, makeVar } from "../editors/KeyValueEditor";
@@ -25,6 +25,7 @@ export const SETTINGS_SECTIONS = [
   { id: "shortcuts", title: "Keyboard shortcuts" },
   { id: "workspace", title: "Workspace (shared via git)" },
   { id: "sync", title: "Background sync (this machine)" },
+  { id: "mockserver", title: "Mock Server" },
   { id: "identity", title: "Git identity for this repository" },
   { id: "remotes", title: "Remotes" },
   { id: "onboarding", title: "Team onboarding link" },
@@ -60,6 +61,7 @@ export function SettingsView() {
       <ShortcutsSettings />
       {/* Keyed so the forms re-initialise when the data changes on disk. */}
       <ManifestForm key={JSON.stringify(tree.manifest)} workspaceId={entry.id} manifest={tree.manifest} root={tree.root} />
+      <MockServerForm key={entry.id} workspaceId={entry.id} entry={entry} />
       <SyncForm key={`${entry.id}:${JSON.stringify(entry.sync)}`} workspaceId={entry.id} initial={entry.sync} />
       <GitSettings key={entry.id} workspaceId={entry.id} />
       <Section id="onboarding">
@@ -348,5 +350,44 @@ function GitSettings({ workspaceId }: { workspaceId: string }) {
         </button>
       </Section>
     </>
+  );
+}
+
+function MockServerForm({ workspaceId, entry }: { workspaceId: string; entry: WorkspaceEntry }) {
+  const { toast, refreshWorkspaces } = useStore.getState();
+  const [port, setPort] = useState(entry.mockServerPort ?? "");
+
+  const save = async (nextPort: number | null) => {
+    try {
+      await api.setMockServerPort(workspaceId, nextPort);
+      await refreshWorkspaces();
+      toast("success", "Mock server port updated");
+    } catch (e) {
+      toast("error", errorMessage(e));
+    }
+  };
+
+  return (
+    <Section id="mockserver">
+      <label className="label">Mock Server Port</label>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min="0"
+          max="65535"
+          className="input w-32"
+          value={port}
+          placeholder="Off"
+          onChange={(e) => {
+            const val = e.target.value;
+            setPort(val === "" ? "" : Number(val));
+            void save(val === "" ? null : Number(val));
+          }}
+        />
+        <span className="text-[12px] text-faint">
+          Serve saved responses from this workspace locally.
+        </span>
+      </div>
+    </Section>
   );
 }

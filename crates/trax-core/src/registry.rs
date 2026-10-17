@@ -83,6 +83,8 @@ pub struct WorkspaceEntry {
     pub sync: SyncSettings,
     #[serde(default)]
     pub prefs: WorkspacePrefs,
+    #[serde(default)]
+    pub mock_server_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -192,6 +194,7 @@ impl Registry {
             team: manifest.team,
             sync: SyncSettings::default(),
             prefs: WorkspacePrefs::default(),
+            mock_server_port: None,
         };
         self.data.workspaces.push(entry.clone());
         if self.data.active_workspace.is_none() {

@@ -23,6 +23,7 @@ function subtitle(w: WorkspaceEntry, sync: SyncReport | undefined, summary: Work
   if (requests) parts.push(requests);
   if (sync?.state === "offline") parts.push("offline");
   if (sync?.state === "auth-required") parts.push("sign-in needed");
+  if (summary?.mockServerPort) parts.push(`mock server :${summary.mockServerPort}`);
   return parts.join(" · ");
 }
 

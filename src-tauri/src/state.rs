@@ -33,6 +33,8 @@ pub struct AppState {
     pub sync_in_flight: Mutex<HashSet<String>>,
     pub watchers: Mutex<HashMap<String, RecommendedWatcher>>,
     pub mcp_server: McpServerManager,
+    #[allow(dead_code)]
+    pub mock_server: crate::mock_server::MockServerManager,
 }
 
 impl AppState {
@@ -43,6 +45,7 @@ impl AppState {
             sync_in_flight: Mutex::default(),
             watchers: Mutex::default(),
             mcp_server: McpServerManager::new(),
+            mock_server: crate::mock_server::MockServerManager::new(),
         }
     }
 

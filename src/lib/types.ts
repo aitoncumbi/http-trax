@@ -256,6 +256,7 @@ export interface WorkspaceEntry {
   team?: string | null;
   sync: SyncSettings;
   prefs: WorkspacePrefs;
+  mockServerPort?: number | null;
 }
 
 export interface Header {
@@ -607,6 +608,8 @@ export interface WorkspaceSummary {
   isRepo: boolean;
   remote?: string | null;
   members?: number | null;
+  mockServerPort?: number | null;
+  mockServerUrl?: string | null;
 }
 
 export interface ImportSummary {

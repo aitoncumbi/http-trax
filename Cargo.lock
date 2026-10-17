@@ -2185,6 +2185,7 @@ dependencies = [
  "trax-core",
  "trax-git",
  "trax-mcp",
+ "url",
  "uuid",
 ]
 
