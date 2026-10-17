@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -8,11 +6,11 @@ use axum::{
     routing::any,
     Router,
 };
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::oneshot;
 use trax_core::Workspace;
-
-
 
 #[allow(dead_code)]
 pub struct MockServerManager {
@@ -65,12 +63,20 @@ async fn mock_handler(
 ) -> impl IntoResponse {
     let ws = match Workspace::open(workspace_path.as_str()) {
         Ok(ws) => ws,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Workspace not found").into_response(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Workspace not found").into_response()
+        }
     };
 
     let tree = match ws.tree() {
         Ok(t) => t,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read workspace tree").into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to read workspace tree",
+            )
+                .into_response()
+        }
     };
 
     let req_path = req.uri().path();
@@ -89,7 +95,8 @@ async fn mock_handler(
                     for saved in responses {
                         // Check if the saved request URL path matches the incoming path
                         if let Ok(url) = url::Url::parse(&saved.request.url) {
-                            if url.path() == req_path || (req_path == "/" && url.path().is_empty()) {
+                            if url.path() == req_path || (req_path == "/" && url.path().is_empty())
+                            {
                                 best_match = Some(saved);
                                 break;
                             }
@@ -113,12 +120,14 @@ async fn mock_handler(
     }
 
     if let Some(saved) = best_match {
-        let mut response = Response::builder()
-            .status(saved.response.status);
+        let mut response = Response::builder().status(saved.response.status);
 
         if let Some(headers) = response.headers_mut() {
             for h in saved.response.headers {
-                if let (Ok(name), Ok(value)) = (HeaderName::try_from(h.key.as_str()), HeaderValue::try_from(h.value.as_str())) {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::try_from(h.key.as_str()),
+                    HeaderValue::try_from(h.value.as_str()),
+                ) {
                     headers.insert(name, value);
                 }
             }
@@ -134,7 +143,13 @@ async fn mock_handler(
             Body::from(saved.response.body)
         };
 
-        response.body(body).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response())
+        response.body(body).unwrap_or_else(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to build response",
+            )
+                .into_response()
+        })
     } else {
         (StatusCode::NOT_FOUND, "No matching saved response found").into_response()
     }

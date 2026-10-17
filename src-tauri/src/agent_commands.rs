@@ -336,7 +336,12 @@ pub async fn set_mock_server_port(
     port: Option<u16>,
 ) -> crate::state::CmdResult<()> {
     state.update_registry(|reg| {
-        if let Some(ws) = reg.data.workspaces.iter_mut().find(|w| w.id == workspace_id) {
+        if let Some(ws) = reg
+            .data
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == workspace_id)
+        {
             ws.mock_server_port = port;
         }
         Ok(())
