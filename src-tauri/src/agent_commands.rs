@@ -199,9 +199,12 @@ pub struct WorkspaceSummary {
     pub remote: Option<String>,
     /// People who committed here (distinct author emails, recent history).
     pub members: Option<usize>,
+    pub mock_server_port: Option<u16>,
+    pub mock_server_url: Option<String>,
 }
 
-fn summarize(id: String, path: &Path) -> WorkspaceSummary {
+fn summarize(id: String, path: &Path, mock_port: Option<u16>) -> WorkspaceSummary {
+    let mock_server_url = mock_port.map(|p| format!("http://localhost:{p}"));
     let mut summary = WorkspaceSummary {
         id,
         exists: false,
@@ -210,6 +213,8 @@ fn summarize(id: String, path: &Path) -> WorkspaceSummary {
         is_repo: false,
         remote: None,
         members: None,
+        mock_server_port: mock_port,
+        mock_server_url,
     };
     let Ok(ws) = Workspace::open(path) else {
         return summary;
@@ -240,7 +245,7 @@ pub async fn workspace_summaries(state: State<'_, AppState>) -> CmdResult<Vec<Wo
     tauri::async_runtime::spawn_blocking(move || {
         entries
             .into_iter()
-            .map(|e| summarize(e.id, Path::new(&e.path)))
+            .map(|e| summarize(e.id, Path::new(&e.path), e.mock_server_port))
             .collect()
     })
     .await
@@ -321,5 +326,38 @@ pub async fn set_mcp_port(
     } else {
         state.mcp_server.stop();
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_mock_server_port(
+    state: tauri::State<'_, crate::state::AppState>,
+    workspace_id: String,
+    port: Option<u16>,
+) -> crate::state::CmdResult<()> {
+    state.update_registry(|reg| {
+        if let Some(ws) = reg
+            .data
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == workspace_id)
+        {
+            ws.mock_server_port = port;
+        }
+        Ok(())
+    })?;
+
+    if let Some(p) = port {
+        if p > 0 {
+            if let Ok(entry) = state.entry(&workspace_id) {
+                state.mock_server.start(p, entry.path);
+            }
+        } else {
+            state.mock_server.stop();
+        }
+    } else {
+        state.mock_server.stop();
+    }
+
     Ok(())
 }

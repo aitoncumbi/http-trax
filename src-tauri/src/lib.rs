@@ -5,6 +5,7 @@ mod agent_commands;
 mod commands;
 mod git_commands;
 mod mcp_server;
+mod mock_server;
 mod oauth_commands;
 mod state;
 mod sync;
@@ -36,6 +37,15 @@ pub fn run() {
                         state.mcp_server.start(port, handle);
                     }
                 }
+                if let Some(active_ws_id) = reg.data.active_workspace {
+                    if let Some(ws) = reg.data.workspaces.iter().find(|w| w.id == active_ws_id) {
+                        if let Some(port) = ws.mock_server_port {
+                            if port > 0 {
+                                state.mock_server.start(port, ws.path.clone());
+                            }
+                        }
+                    }
+                }
             }
 
             Ok(())
@@ -44,6 +54,7 @@ pub fn run() {
             agent_commands::agent_overview,
             agent_commands::set_agent_permissions,
             agent_commands::set_mcp_port,
+            agent_commands::set_mock_server_port,
             agent_commands::workspace_summaries,
             commands::set_environment_shared,
             commands::import_json,
