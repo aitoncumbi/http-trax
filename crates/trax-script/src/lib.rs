@@ -14,6 +14,9 @@ use std::collections::BTreeMap;
 use boa_engine::{js_string, Context, JsString, JsValue, Source};
 use serde::{Deserialize, Serialize};
 
+mod crypto;
+mod request;
+
 const PRELUDE: &str = include_str!("prelude.js");
 
 /// Resource limits for a script run.
@@ -107,6 +110,9 @@ pub struct ScriptInput {
     /// The current data row of a data-driven run. Read-only from scripts.
     pub iteration_data: BTreeMap<String, String>,
     pub info: ScriptInfo,
+    /// Pre-fetched code of libraries `require`d by this script.
+    #[serde(default)]
+    pub required_libs: BTreeMap<String, String>,
 }
 
 impl ScriptInput {
@@ -120,6 +126,7 @@ impl ScriptInput {
             collection_variables: BTreeMap::new(),
             iteration_data: BTreeMap::new(),
             info: ScriptInfo::default(),
+            required_libs: BTreeMap::new(),
         }
     }
 }
@@ -188,6 +195,9 @@ pub fn run_with_limits(
         .set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut()
         .set_recursion_limit(limits.recursion);
+
+    let _ = crypto::register(&mut ctx);
+    let _ = request::register(&mut ctx);
 
     let input_json = serde_json::to_string(input)?;
     // Embed as a JS string literal and parse inside the engine: JSON string
