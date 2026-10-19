@@ -1,14 +1,10 @@
 use boa_engine::{
-    js_string, Context, JsArgs, JsNativeError, JsResult, JsValue, NativeFunction, JsObject,
-    object::FunctionObjectBuilder,
+    js_string, object::FunctionObjectBuilder, Context, JsArgs, JsNativeError, JsObject, JsResult,
+    JsValue, NativeFunction,
 };
 use std::collections::BTreeMap;
 
-pub fn send_request(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+pub fn send_request(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let req_obj = args.get_or_undefined(0);
     let mut url = String::new();
     let mut method = "GET".to_string();
@@ -57,10 +53,12 @@ pub fn send_request(
             }
         }
     } else {
-        return Err(JsNativeError::typ().with_message("expected request string or object").into());
+        return Err(JsNativeError::typ()
+            .with_message("expected request string or object")
+            .into());
     }
 
-    let cb_opt = args.get_or_undefined(1).as_callable().map(|c| c.clone());
+    let cb_opt = args.get_or_undefined(1).as_callable();
 
     let client = reqwest::blocking::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -93,14 +91,38 @@ pub fn send_request(
                 let text = resp.text().unwrap_or_default();
 
                 let obj = JsObject::with_object_proto(ctx.intrinsics());
-                let _ = obj.set(js_string!("code"), JsValue::from(status.as_u16()), false, ctx);
-                let _ = obj.set(js_string!("status"), JsValue::from(js_string!(status.canonical_reason().unwrap_or(""))), false, ctx);
-                let _ = obj.set(js_string!("text"), JsValue::from(js_string!(text.clone())), false, ctx);
-                let _ = obj.set(js_string!("stream"), JsValue::from(js_string!(text.clone())), false, ctx);
+                let _ = obj.set(
+                    js_string!("code"),
+                    JsValue::from(status.as_u16()),
+                    false,
+                    ctx,
+                );
+                let _ = obj.set(
+                    js_string!("status"),
+                    JsValue::from(js_string!(status.canonical_reason().unwrap_or(""))),
+                    false,
+                    ctx,
+                );
+                let _ = obj.set(
+                    js_string!("text"),
+                    JsValue::from(js_string!(text.clone())),
+                    false,
+                    ctx,
+                );
+                let _ = obj.set(
+                    js_string!("stream"),
+                    JsValue::from(js_string!(text.clone())),
+                    false,
+                    ctx,
+                );
 
                 let json_text = text.clone();
                 let json_fn = NativeFunction::from_copy_closure_with_captures(
-                    move |_this: &JsValue, _args: &[JsValue], captures: &String, _ctx: &mut Context| -> JsResult<JsValue> {
+                    move |_this: &JsValue,
+                          _args: &[JsValue],
+                          captures: &String,
+                          _ctx: &mut Context|
+                          -> JsResult<JsValue> {
                         // For a real `pm.sendRequest` json() should parse the text into a JSON object.
                         // We do a simple JSON.parse
                         let parsed = serde_json::from_str::<serde_json::Value>(captures.as_str())
@@ -119,10 +141,15 @@ pub fn send_request(
                 let args_for_call: [JsValue; 2] = [JsValue::undefined(), JsValue::from(obj)];
                 let _ = JsObject::call(&callback, &JsValue::undefined(), &args_for_call, ctx)?;
                 Ok(JsValue::undefined())
-            },
+            }
             Err(e) => {
                 let err_obj = JsObject::with_object_proto(ctx.intrinsics());
-                let _ = err_obj.set(js_string!("message"), JsValue::from(js_string!(e.to_string())), false, ctx);
+                let _ = err_obj.set(
+                    js_string!("message"),
+                    JsValue::from(js_string!(e.to_string())),
+                    false,
+                    ctx,
+                );
                 let args_for_call: [JsValue; 2] = [JsValue::from(err_obj), JsValue::undefined()];
                 let _ = JsObject::call(&callback, &JsValue::undefined(), &args_for_call, ctx)?;
                 Ok(JsValue::undefined())
@@ -134,6 +161,10 @@ pub fn send_request(
 }
 
 pub fn register(ctx: &mut Context) -> JsResult<()> {
-    ctx.register_global_callable(js_string!("__traxSendRequest"), 2, NativeFunction::from_fn_ptr(send_request))?;
+    ctx.register_global_callable(
+        js_string!("__traxSendRequest"),
+        2,
+        NativeFunction::from_fn_ptr(send_request),
+    )?;
     Ok(())
 }

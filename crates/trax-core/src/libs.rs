@@ -1,11 +1,20 @@
+use crate::fsutil::write_atomic;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::fsutil::write_atomic;
 
 const LIBRARIES: &[(&str, &str)] = &[
-    ("lodash", "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"),
-    ("dayjs", "https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js"),
-    ("ajv", "https://cdnjs.cloudflare.com/ajax/libs/ajv/8.12.0/ajv7.min.js"),
+    (
+        "lodash",
+        "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js",
+    ),
+    (
+        "dayjs",
+        "https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js",
+    ),
+    (
+        "ajv",
+        "https://cdnjs.cloudflare.com/ajax/libs/ajv/8.12.0/ajv7.min.js",
+    ),
 ];
 
 pub async fn fetch_libs(source: &str, cache_dir: PathBuf) -> HashMap<String, String> {
