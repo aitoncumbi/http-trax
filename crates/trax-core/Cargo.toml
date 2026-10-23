@@ -23,6 +23,14 @@ tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
+tokio-tungstenite = { version = "0.30.0", features = ["native-tls"] }
+async-stream = "0.3.6"
+eventsource-client = "0.16.0"
+tonic = "0.14.5"
+prost = "0.14.4"
+prost-types = "0.14.4"
+tonic-reflection = "0.14.5"
+tokio-stream = "0.1.19"
 
 # OS keychain on Windows (Credential Manager) and macOS (Keychain). Linux goes
 # through libsecret's `secret-tool`, so the headless build needs no D-Bus.
